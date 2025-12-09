@@ -1,0 +1,24 @@
+{
+  "name": "map-overlay-app",
+  "version": "1.0.0",
+  "description": "Interactive map visualization tool with overlay and street selection features",
+  "main": "src/index.html",
+  "scripts": {
+    "serve": "python3 -m http.server 8080",
+    "serve:dist": "cd dist && python3 -m http.server 8081",
+    "build": "cp src/index.html dist/index.html"
+  },
+  "keywords": [
+    "map",
+    "visualization",
+    "leaflet",
+    "geojson",
+    "overpass",
+    "openstreetmap"
+  ],
+  "author": "Map Overlay App",
+  "license": "MIT",
+  "dependencies": {
+    "leaflet": "^1.9.4"
+  }
+}
