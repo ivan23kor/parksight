@@ -1,6 +1,8 @@
 # Parking Sign Detection Training
 
-YOLOv8 parking sign detector trained on Kaggle with documented augmentation experiments.
+YOLO12 parking sign detector trained on Kaggle with documented augmentation experiments.
+
+**Model:** YOLO12n (attention-centric architecture, 40.6 mAP on COCO)
 
 ## Dataset
 
@@ -73,7 +75,7 @@ datasets/
 ├── build_unified_dataset.py     # Dataset building script
 ├── unified-parking-signs.zip    # Kaggle upload (296MB)
 └── unified-parking-signs/       # Built dataset
-    ├── data.yaml                # YOLOv8 config
+    ├── data.yaml                # YOLO12 config
     ├── train/                   # 2,570 images
     ├── valid/                   # 321 images
     └── test/                    # 322 images
