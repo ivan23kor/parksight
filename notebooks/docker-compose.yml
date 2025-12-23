@@ -1,0 +1,11 @@
+services:
+  train:
+    build: .
+    volumes:
+      - ../datasets/parking-sign-detection-coco-dataset:/kaggle/input/parking-sign-detection-coco-dataset:ro
+      - ./output:/kaggle/working
+    command: >
+      jupyter nbconvert --to notebook --execute
+      --ExecutePreprocessor.timeout=3600
+      /kaggle/working/parking_sign_training.ipynb
+      --output /kaggle/working/executed_notebook.ipynb

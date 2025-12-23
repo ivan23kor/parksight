@@ -6,7 +6,7 @@ YOLO12 parking sign detector trained on Kaggle with documented augmentation expe
 
 ## Dataset
 
-**Unified Parking Sign Detection Dataset** - `unified-parking-signs.zip`
+**Unified Parking Sign Detection Dataset** - `parking-sign-detection-coco-dataset.zip`
 
 - **3,213 images** with 1 class (`parking_sign`)
 - **Combined from:**
@@ -21,7 +21,7 @@ YOLO12 parking sign detector trained on Kaggle with documented augmentation expe
 ### 1. Upload Dataset to Kaggle
 
 Manual upload at kaggle.com/datasets/new:
-- Upload `datasets/unified-parking-signs.zip`
+- Upload `datasets/parking-sign-detection-coco-dataset.zip`
 - Title: "Unified Parking Sign Detection Dataset"
 - Make public
 
@@ -29,7 +29,7 @@ Manual upload at kaggle.com/datasets/new:
 
 1. Go to kaggle.com/code
 2. New Notebook → Import `parking_sign_training.ipynb`
-3. Add your dataset: "+ Add Data" → search "unified-parking-signs"
+3. Add your dataset: "+ Add Data" → search "parking-sign-detection-coco-dataset"
 4. Enable GPU: Settings → Accelerator → GPU T4
 5. Run all cells
 
@@ -73,8 +73,8 @@ configs/
 
 datasets/
 ├── build_unified_dataset.py     # Dataset building script
-├── unified-parking-signs.zip    # Kaggle upload (296MB)
-└── unified-parking-signs/       # Built dataset
+├── parking-sign-detection-coco-dataset.zip    # Kaggle upload (296MB)
+└── parking-sign-detection-coco-dataset/       # Built dataset
     ├── data.yaml                # YOLO12 config
     ├── train/                   # 2,570 images
     ├── valid/                   # 321 images

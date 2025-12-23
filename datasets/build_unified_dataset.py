@@ -19,7 +19,7 @@ VAL_RATIO = 0.1
 TEST_RATIO = 0.1
 
 BASE_DIR = Path(__file__).parent
-OUTPUT_DIR = BASE_DIR / "unified-parking-signs"
+OUTPUT_DIR = BASE_DIR / "parking-sign-detection-coco-dataset"
 
 
 def convert_sf_parking_signs():
