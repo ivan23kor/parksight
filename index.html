@@ -173,6 +173,26 @@
         .controls button:hover {
             background: #005a87;
         }
+
+        #progressContainer {
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        #progressContainer.visible {
+            opacity: 1;
+        }
+
+        #progressBar.indeterminate {
+            background: linear-gradient(90deg, #007cba 30%, #005a87 50%, #007cba 70%);
+            background-size: 200% 100%;
+            animation: indeterminate 1.5s infinite;
+        }
+
+        @keyframes indeterminate {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
     </style>
 </head>
 <body>
@@ -183,11 +203,30 @@
 
     <div id="map"></div>
 
+    <div id="imageModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:2000; cursor:pointer;">
+        <img id="modalImage" style="max-width:90%; max-height:90%; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);">
+    </div>
+
+    <!-- Progress Bar Container -->
+    <div id="progressContainer" style="display: none; position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 1500; background: white; padding: 15px 30px; border-radius: 0 0 8px 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); min-width: 350px;">
+        <div id="progressText" style="margin-bottom: 8px; font-size: 14px; color: #333; text-align: center;">Loading street view images...</div>
+        <div style="width: 100%; height: 6px; background: #e0e0e0; border-radius: 3px; overflow: hidden;">
+            <div id="progressBar" style="height: 100%; background: #007cba; width: 0%; transition: width 0.3s ease; border-radius: 3px;"></div>
+        </div>
+        <div id="progressDetails" style="margin-top: 5px; font-size: 12px; color: #666; text-align: center;"></div>
+    </div>
+
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+    <script src="config.js"></script>
     <script>
+        // Modal close handler
+        document.getElementById('imageModal').onclick = () => {
+            document.getElementById('imageModal').style.display = 'none';
+        };
+
         // Initialize map
-        let map = L.map('map').setView([51.045, -114.065], 13);
+        let map = L.map('map').setView([51.04, -114.0686], 16);
 
         // Map providers
         const mapProviders = {
@@ -202,11 +241,24 @@
 
         // Street selection
         let streetsLayer = L.layerGroup().addTo(map);
+        let streetViewDotsLayer = L.layerGroup().addTo(map);
         let isSelecting = false;
         let isDrawingRect = false;
         let selectionStart = null;
         let selectionRect = null;
         let selectionLayer = L.layerGroup().addTo(map);
+
+
+        // Mapillary API configuration
+        const MAPILLARY_ACCESS_TOKEN = window.MAPILLARY_CONFIG?.ACCESS_TOKEN || 'YOUR_MAPILLARY_TOKEN';
+        const MAPILLARY_CONFIG = {
+            apiBase: 'https://graph.mapillary.com',
+            imageBase: 'https://images.mapillary.com',
+            imageSize: 1024, // For OCR optimization
+            searchRadiusMeters: 50,
+            maxRetries: 3,
+            retryDelay: 1000
+        };
 
   
         // Street selection functionality
@@ -242,6 +294,7 @@
 
         document.getElementById('clearStreets').addEventListener('click', () => {
             streetsLayer.clearLayers();
+            streetViewDotsLayer.clearLayers();
         });
 
         // Map mouse events for rectangle selection
@@ -293,7 +346,7 @@
             map.dragging.enable();
             map.doubleClickZoom.enable();
 
-            await fetchStreetsInBounds(bounds);
+            await fetchStreetViewImagesInBounds(bounds);
         });
 
         // Also handle click to cancel selection
@@ -422,6 +475,96 @@
             }
         }
 
+        // Fetch street view images in batches within bounds
+        async function fetchStreetViewImagesInBounds(bounds) {
+            const bbox = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
+
+            if (!MAPILLARY_ACCESS_TOKEN || MAPILLARY_ACCESS_TOKEN === 'YOUR_MAPILLARY_TOKEN') {
+                showProgress('Mapillary API token not configured', false);
+                updateProgress(0, 'Please add a valid token to config.js');
+                document.getElementById('progressDetails').innerHTML = '<button onclick="hideProgress()" style="background: #6c757d;">Close</button>';
+                return 0;
+            }
+
+            streetViewDotsLayer.clearLayers();
+            showProgress('Fetching street view images...', true);
+
+            const BATCH_SIZE = 100;
+            let totalImages = 0;
+            let batchNum = 0;
+            let nextUrl = `${MAPILLARY_CONFIG.apiBase}/images?access_token=${MAPILLARY_ACCESS_TOKEN}&bbox=${bbox}&limit=${BATCH_SIZE}&fields=id,geometry,thumb_2048_url`;
+
+            try {
+                while (nextUrl) {
+                    batchNum++;
+                    updateProgress(0, `Fetching batch ${batchNum}...`);
+
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+                    const response = await fetch(nextUrl, { signal: controller.signal });
+                    clearTimeout(timeoutId);
+
+                    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+
+                    const data = await response.json();
+
+                    if (!data.data || data.data.length === 0) {
+                        if (totalImages === 0) {
+                            showProgress('No street view images found', false);
+                            setTimeout(hideProgress, 2000);
+                            return 0;
+                        }
+                        break;
+                    }
+
+                    // Add dots for this batch
+                    for (const image of data.data) {
+                        const [lng, lat] = image.geometry.coordinates;
+                        const dot = L.circleMarker([lat, lng], {
+                            radius: 6,
+                            fillColor: '#00ff00',
+                            color: '#008800',
+                            weight: 1,
+                            opacity: 0.8,
+                            fillOpacity: 0.6
+                        }).addTo(streetViewDotsLayer);
+
+                        dot.on('click', () => {
+                            document.getElementById('modalImage').src = image.thumb_2048_url;
+                            document.getElementById('imageModal').style.display = 'block';
+                        });
+                    }
+
+                    totalImages += data.data.length;
+                    updateProgress(0, `Loaded ${totalImages} images (batch ${batchNum})`);
+
+                    // Check for next page
+                    nextUrl = data.paging?.next || null;
+
+                    // Yield to browser
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                }
+
+                showProgress('Complete!', false);
+                updateProgress(100, `Added ${totalImages} street view images`);
+                setTimeout(hideProgress, 2000);
+                return totalImages;
+
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    console.error('Request timed out');
+                    showProgress('Request timed out', false);
+                } else {
+                    console.error('Error fetching Mapillary:', error);
+                    showProgress('Failed to load images', false);
+                }
+                updateProgress(0, error.message);
+                document.getElementById('progressDetails').innerHTML = '<button onclick="hideProgress()" style="background: #6c757d;">Close</button>';
+                return totalImages;
+            }
+        }
+
         // Highlight streets on the map
         function highlightStreets(overpassData) {
             const geojson = overpassToGeoJSON(overpassData);
@@ -443,6 +586,11 @@
                 }
             }).addTo(streetsLayer);
 
+            // Add Mapillary availability dots along selected streets
+            addMapillaryDots(geojson)
+                .then(count => console.log(`Added ${count} Mapillary dots`))
+                .catch(err => console.error('Error adding Mapillary dots:', err));
+
             const streetCount = geojson.features.length;
 
             // Center map horizontally to fit all streets
@@ -454,6 +602,69 @@
                 }
             }
         }
+
+        // Progress bar helper functions
+        function showProgress(title, showIndeterminate = true) {
+            const container = document.getElementById('progressContainer');
+            const text = document.getElementById('progressText');
+            const bar = document.getElementById('progressBar');
+            const details = document.getElementById('progressDetails');
+
+            text.textContent = title;
+            details.textContent = '';
+
+            if (showIndeterminate) {
+                bar.classList.add('indeterminate');
+            } else {
+                bar.classList.remove('indeterminate');
+                bar.style.width = '0%';
+            }
+
+            container.style.display = 'block';
+            setTimeout(() => container.classList.add('visible'), 10);
+        }
+
+        function updateProgress(percent, details = '') {
+            const bar = document.getElementById('progressBar');
+            const detailsEl = document.getElementById('progressDetails');
+
+            bar.style.width = `${percent}%`;
+            detailsEl.textContent = details;
+        }
+
+        function hideProgress() {
+            const container = document.getElementById('progressContainer');
+            container.classList.remove('visible');
+            setTimeout(() => {
+                container.style.display = 'none';
+            }, 300);
+        }
+
+        async function processBatch(images, startIdx, batchSize, totalImages) {
+            const endIdx = Math.min(startIdx + batchSize, images.length);
+
+            for (let i = startIdx; i < endIdx; i++) {
+                const image = images[i];
+                const [lng, lat] = image.geometry.coordinates;
+
+                const dot = L.circleMarker([lat, lng], {
+                    radius: 6,
+                    fillColor: '#00ff00',
+                    color: '#008800',
+                    weight: 1,
+                    opacity: 0.8,
+                    fillOpacity: 0.6
+                }).addTo(streetViewDotsLayer);
+
+                dot.on('click', () => {
+                    document.getElementById('modalImage').src = image.thumb_2048_url;
+                    document.getElementById('imageModal').style.display = 'block';
+                });
+            }
+
+            return endIdx - startIdx;
+        }
+
 
         </script>
 </body>

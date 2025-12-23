@@ -1,0 +1,95 @@
+# Parking Sign Detection - Augmentation Configuration
+# Documents all augmentations applied during training
+
+# =============================================================================
+# PRE-APPLIED AUGMENTATIONS (Roboflow)
+# =============================================================================
+# These were applied during dataset creation - already baked into images
+roboflow:
+  versions_per_image: 3
+  rotation:
+    degrees: 15  # ±15°
+  brightness:
+    adjust: 15   # ±15%
+  blur:
+    gaussian: 2.5  # 0-2.5px
+
+# =============================================================================
+# YOLOV8 RUNTIME AUGMENTATIONS
+# =============================================================================
+# Applied during training by ultralytics
+
+# Experiment 1: Baseline (no additional augmentation)
+exp1_baseline:
+  mosaic: 0.0
+  mixup: 0.0
+  copy_paste: 0.0
+  degrees: 0.0
+  translate: 0.1
+  scale: 0.0
+  fliplr: 0.0
+  flipud: 0.0
+
+# Experiment 2: Mosaic augmentation
+exp2_mosaic:
+  mosaic: 1.0        # Combine 4 training images into 1
+  mixup: 0.0
+  copy_paste: 0.0
+  degrees: 0.0
+  translate: 0.1     # Image translation (+/- fraction)
+  scale: 0.5         # Image scale (+/- gain)
+  fliplr: 0.5        # Horizontal flip probability
+  flipud: 0.0
+
+# Experiment 3: HSV color augmentation
+exp3_hsv:
+  mosaic: 1.0
+  hsv_h: 0.015       # Hue adjustment
+  hsv_s: 0.7         # Saturation adjustment
+  hsv_v: 0.4         # Value (brightness) adjustment
+  translate: 0.1
+  scale: 0.5
+  fliplr: 0.5
+
+# Experiment 4: Geometric transforms
+exp4_geometric:
+  mosaic: 1.0
+  degrees: 15.0      # Rotation degrees
+  translate: 0.1
+  scale: 0.5
+  shear: 5.0         # Shear degrees
+  perspective: 0.0005  # Perspective warp
+  fliplr: 0.5
+
+# Experiment 5: Full augmentation suite
+exp5_full:
+  mosaic: 1.0
+  mixup: 0.1         # Blend two images together
+  copy_paste: 0.1    # Copy-paste augmentation
+  hsv_h: 0.015
+  hsv_s: 0.7
+  hsv_v: 0.4
+  degrees: 15.0
+  translate: 0.1
+  scale: 0.5
+  shear: 5.0
+  perspective: 0.0005
+  fliplr: 0.5
+  flipud: 0.0        # No vertical flip (signs have orientation)
+
+# =============================================================================
+# PARAMETER REFERENCE
+# =============================================================================
+# mosaic: Probability of mosaic augmentation (combines 4 images)
+# mixup: Probability of MixUp augmentation (blends 2 images)
+# copy_paste: Probability of copy-paste augmentation
+# hsv_h: Hue shift fraction (0.0-1.0)
+# hsv_s: Saturation shift fraction (0.0-1.0)
+# hsv_v: Value shift fraction (0.0-1.0)
+# degrees: Rotation range (+/- degrees)
+# translate: Translation fraction of image
+# scale: Scale factor range (+/- fraction)
+# shear: Shear angle range (+/- degrees)
+# perspective: Perspective warp factor
+# fliplr: Horizontal flip probability
+# flipud: Vertical flip probability (usually 0 for signs)
