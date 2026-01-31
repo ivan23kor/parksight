@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Map Overlay Visualization</title>
+    <title>Street View Driver Perspective</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         * {
@@ -24,47 +24,6 @@
             height: 100%;
         }
 
-        h1 {
-            font-size: 20px;
-            margin-bottom: 20px;
-            color: #333;
-        }
-
-        h2 {
-            font-size: 16px;
-            margin-bottom: 10px;
-            margin-top: 20px;
-            color: #555;
-        }
-
-        .control-group {
-            margin-bottom: 20px;
-            padding: 15px;
-            background: white;
-            border-radius: 5px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
-
-        .overlay-item {
-            display: flex;
-            align-items: center;
-            margin-bottom: 10px;
-        }
-
-        .overlay-item label {
-            flex: 1;
-            cursor: pointer;
-        }
-
-        .overlay-item input[type="checkbox"] {
-            margin-right: 10px;
-        }
-
-        .overlay-item input[type="range"] {
-            width: 60px;
-            margin-left: 10px;
-        }
-
         button {
             background: #007cba;
             color: white;
@@ -80,73 +39,12 @@
             background: #005a87;
         }
 
-        input[type="file"] {
-            display: none;
-        }
-
-        .file-label {
-            display: inline-block;
-            background: #28a745;
-            color: white;
-            padding: 8px 15px;
+        select {
+            padding: 8px 12px;
             border-radius: 4px;
-            cursor: pointer;
+            border: 1px solid #ccc;
             font-size: 14px;
-        }
-
-        .file-label:hover {
-            background: #1e7e34;
-        }
-
-        textarea {
-            width: 100%;
-            min-height: 100px;
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-family: monospace;
-            font-size: 12px;
-            margin-bottom: 10px;
-        }
-
-        .color-picker {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            margin-bottom: 10px;
-        }
-
-        .color-picker input[type="color"] {
-            width: 50px;
-            height: 30px;
-            border: none;
             cursor: pointer;
-        }
-
-        .selection-rect {
-            fill: rgba(0, 123, 255, 0.1);
-            stroke: #007bff;
-            stroke-width: 2;
-            stroke-dasharray: 5, 5;
-        }
-
-        .status-message {
-            padding: 10px;
-            margin: 10px 0;
-            border-radius: 4px;
-            font-size: 14px;
-        }
-
-        .status-info {
-            background: #d1ecf1;
-            color: #0c5460;
-            border: 1px solid #bee5eb;
-        }
-
-        .status-success {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
         }
 
         .controls {
@@ -158,20 +56,13 @@
             padding: 10px;
             border-radius: 5px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 10px;
+            align-items: center;
         }
 
         .controls button {
-            background: #007cba;
-            color: white;
-            border: none;
-            padding: 8px 15px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-        }
-
-        .controls button:hover {
-            background: #005a87;
+            margin-right: 0;
         }
 
         #progressContainer {
@@ -193,479 +84,437 @@
             0% { background-position: -200% 0; }
             100% { background-position: 200% 0; }
         }
+
+        /* Panorama Modal */
+        #panoramaModal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.9);
+            z-index: 2000;
+        }
+
+        #panoramaModal.visible {
+            display: block;
+        }
+
+        #panoramaContainer {
+            width: 100%;
+            height: 100%;
+        }
+
+        #closePanorama {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 2001;
+            background: rgba(255,255,255,0.9);
+            color: #333;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        #closePanorama:hover {
+            background: white;
+        }
     </style>
 </head>
 <body>
     <div class="controls">
-        <button id="selectStreets">Select Streets (Ctrl+Click)</button>
+        <button id="selectStreets">Select Area (Ctrl+Drag)</button>
+        <select id="sideToggle">
+            <option value="right">Right side</option>
+            <option value="left">Left side</option>
+        </select>
         <button id="clearStreets" style="background: #dc3545;">Clear</button>
     </div>
 
     <div id="map"></div>
 
-    <div id="imageModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:2000; cursor:pointer;">
-        <img id="modalImage" style="max-width:90%; max-height:90%; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);">
-    </div>
-
     <!-- Progress Bar Container -->
     <div id="progressContainer" style="display: none; position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 1500; background: white; padding: 15px 30px; border-radius: 0 0 8px 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); min-width: 350px;">
-        <div id="progressText" style="margin-bottom: 8px; font-size: 14px; color: #333; text-align: center;">Loading street view images...</div>
+        <div id="progressText" style="margin-bottom: 8px; font-size: 14px; color: #333; text-align: center;">Loading...</div>
         <div style="width: 100%; height: 6px; background: #e0e0e0; border-radius: 3px; overflow: hidden;">
             <div id="progressBar" style="height: 100%; background: #007cba; width: 0%; transition: width 0.3s ease; border-radius: 3px;"></div>
         </div>
         <div id="progressDetails" style="margin-top: 5px; font-size: 12px; color: #666; text-align: center;"></div>
     </div>
 
+    <!-- Panorama Modal -->
+    <div id="panoramaModal">
+        <button id="closePanorama">✕ Close</button>
+        <div id="panoramaContainer"></div>
+    </div>
+
+    <!-- External Libraries -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+    
+    <!-- Config and Modules -->
     <script src="config.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/streets.js"></script>
+    <script src="js/streetview.js"></script>
+
+    <!-- Google Maps API (loaded after config.js so we have the API key) -->
     <script>
-        // Modal close handler
-        document.getElementById('imageModal').onclick = () => {
-            document.getElementById('imageModal').style.display = 'none';
-        };
+        // Load Google Maps API dynamically
+        (function loadGoogleMapsAPI() {
+            const apiKey = window.GOOGLE_CONFIG?.API_KEY;
+            if (!apiKey) {
+                console.error('Google API key not configured');
+                return;
+            }
+            const script = document.createElement('script');
+            script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=streetview&callback=initApp`;
+            script.async = true;
+            script.defer = true;
+            document.head.appendChild(script);
+        })();
+    </script>
 
-        // Initialize map
-        let map = L.map('map').setView([51.04, -114.0686], 16);
-
-        // Map providers
-        const mapProviders = {
-            openstreetmap: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-            cartodb: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
-            'cartodb-dark': 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'
-        };
-
-        let currentTileLayer = L.tileLayer(mapProviders.openstreetmap, {
-            attribution: '© OpenStreetMap contributors'
-        }).addTo(map);
-
-        // Street selection
-        let streetsLayer = L.layerGroup().addTo(map);
-        let streetViewDotsLayer = L.layerGroup().addTo(map);
+    <script>
+        // Global state
+        let map;
+        let streetsLayer;
+        let streetViewDotsLayer;
+        let selectionLayer;
         let isSelecting = false;
         let isDrawingRect = false;
         let selectionStart = null;
         let selectionRect = null;
-        let selectionLayer = L.layerGroup().addTo(map);
 
+        // Store point data for click handlers
+        let currentPoints = [];
+        let currentPanoIds = [];
 
-        // Mapillary API configuration
-        const MAPILLARY_ACCESS_TOKEN = window.MAPILLARY_CONFIG?.ACCESS_TOKEN || 'YOUR_MAPILLARY_TOKEN';
-        const MAPILLARY_CONFIG = {
-            apiBase: 'https://graph.mapillary.com',
-            imageBase: 'https://images.mapillary.com',
-            imageSize: 1024, // For OCR optimization
-            searchRadiusMeters: 50,
-            maxRetries: 3,
-            retryDelay: 1000
-        };
+        /**
+         * Initialize the application after Google Maps API loads.
+         */
+        function initApp() {
+            // Check API key
+            if (!window.GOOGLE_CONFIG?.API_KEY) {
+                showError('Google API key not configured. Please add it to config.js');
+                return;
+            }
 
-  
-        // Street selection functionality
-        document.getElementById('selectStreets').addEventListener('click', () => {
-            isSelecting = true;
-            map.getContainer().style.cursor = 'crosshair';
-            map.dragging.disable();
-            map.doubleClickZoom.disable();
-            console.log('Street selection mode activated');
-        });
+            // Initialize Leaflet map
+            map = L.map('map').setView([51.04, -114.0686], 16);
 
-        // Add Ctrl+Click shortcut for street selection
-        map.on('mousedown', (e) => {
-            if (e.originalEvent.ctrlKey || e.originalEvent.metaKey) {
-                e.originalEvent.preventDefault();
+            // Add tile layer
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+
+            // Initialize layers
+            streetsLayer = L.layerGroup().addTo(map);
+            streetViewDotsLayer = L.layerGroup().addTo(map);
+            selectionLayer = L.layerGroup().addTo(map);
+
+            // Set up event handlers
+            setupEventHandlers();
+
+            console.log('App initialized');
+        }
+
+        /**
+         * Set up UI event handlers.
+         */
+        function setupEventHandlers() {
+            // Select button
+            document.getElementById('selectStreets').addEventListener('click', () => {
                 isSelecting = true;
                 map.getContainer().style.cursor = 'crosshair';
                 map.dragging.disable();
                 map.doubleClickZoom.disable();
-                selectionStart = e.latlng;
-                isSelecting = false;
-                isDrawingRect = true;
+            });
 
-                selectionRect = L.rectangle([[selectionStart.lat, selectionStart.lng],
-                                             [selectionStart.lat, selectionStart.lng]], {
-                    color: '#007bff',
-                    weight: 2,
-                    fillOpacity: 0.1,
-                    dashArray: '5, 5'
-                }).addTo(selectionLayer);
-            }
-        });
+            // Clear button
+            document.getElementById('clearStreets').addEventListener('click', () => {
+                streetsLayer.clearLayers();
+                streetViewDotsLayer.clearLayers();
+                currentPoints = [];
+                currentPanoIds = [];
+            });
 
-        document.getElementById('clearStreets').addEventListener('click', () => {
-            streetsLayer.clearLayers();
-            streetViewDotsLayer.clearLayers();
-        });
+            // Close panorama modal
+            document.getElementById('closePanorama').addEventListener('click', closePanoramaModal);
+            document.getElementById('panoramaModal').addEventListener('click', (e) => {
+                if (e.target.id === 'panoramaModal') {
+                    closePanoramaModal();
+                }
+            });
 
-        // Map mouse events for rectangle selection
-        map.on('mousedown', (e) => {
-            if (!isSelecting || e.originalEvent.ctrlKey || e.originalEvent.metaKey) return;
+            // Escape key to close modal
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape') {
+                    closePanoramaModal();
+                }
+            });
 
-            // Prevent the map from handling this event
-            L.DomEvent.preventDefault(e.originalEvent);
-            L.DomEvent.stopPropagation(e.originalEvent);
+            // Ctrl+Click shortcut for selection
+            map.on('mousedown', (e) => {
+                if (e.originalEvent.ctrlKey || e.originalEvent.metaKey) {
+                    e.originalEvent.preventDefault();
+                    startRectangleSelection(e.latlng);
+                }
+            });
 
-            selectionStart = e.latlng;
-            isSelecting = false;
-            isDrawingRect = true;
+            // Regular selection mode mousedown
+            map.on('mousedown', (e) => {
+                if (!isSelecting || e.originalEvent.ctrlKey || e.originalEvent.metaKey) return;
+                L.DomEvent.preventDefault(e.originalEvent);
+                L.DomEvent.stopPropagation(e.originalEvent);
+                startRectangleSelection(e.latlng);
+            });
 
-            selectionRect = L.rectangle([[selectionStart.lat, selectionStart.lng],
-                                         [selectionStart.lat, selectionStart.lng]], {
-                color: '#007bff',
-                weight: 2,
-                fillOpacity: 0.1,
-                dashArray: '5, 5'
-            }).addTo(selectionLayer);
-        });
+            // Mouse move during selection
+            map.on('mousemove', (e) => {
+                if (!isDrawingRect || !selectionRect) return;
+                L.DomEvent.preventDefault(e.originalEvent);
+                L.DomEvent.stopPropagation(e.originalEvent);
+                const bounds = L.latLngBounds(selectionStart, e.latlng);
+                selectionRect.setBounds(bounds);
+            });
 
-        map.on('mousemove', (e) => {
-            if (!isDrawingRect || !selectionRect) return;
+            // Mouse up to complete selection
+            map.on('mouseup', async (e) => {
+                if (!isDrawingRect || !selectionRect) return;
+                L.DomEvent.preventDefault(e.originalEvent);
+                L.DomEvent.stopPropagation(e.originalEvent);
 
-            // Prevent the map from handling this event
-            L.DomEvent.preventDefault(e.originalEvent);
-            L.DomEvent.stopPropagation(e.originalEvent);
+                const bounds = selectionRect.getBounds();
+                selectionRect.remove();
+                selectionRect = null;
+                isDrawingRect = false;
 
-            const bounds = L.latLngBounds(selectionStart, e.latlng);
-            selectionRect.setBounds(bounds);
-        });
-
-        map.on('mouseup', async (e) => {
-            if (!isDrawingRect || !selectionRect) return;
-
-            // Prevent the map from handling this event
-            L.DomEvent.preventDefault(e.originalEvent);
-            L.DomEvent.stopPropagation(e.originalEvent);
-
-            const bounds = selectionRect.getBounds();
-            selectionRect.remove();
-            selectionRect = null;
-            isDrawingRect = false;
-
-            // Re-enable map controls
-            map.getContainer().style.cursor = '';
-            map.dragging.enable();
-            map.doubleClickZoom.enable();
-
-            await fetchStreetViewImagesInBounds(bounds);
-        });
-
-        // Also handle click to cancel selection
-        map.on('click', (e) => {
-            if (isSelecting && !isDrawingRect) {
-                // Cancel selection mode
-                isSelecting = false;
+                // Re-enable map controls
                 map.getContainer().style.cursor = '';
                 map.dragging.enable();
                 map.doubleClickZoom.enable();
-            }
-        });
 
-        // Fetch streets using Overpass API
-        async function fetchStreetsInBounds(bounds) {
+                await onSelectionComplete(bounds);
+            });
+
+            // Click to cancel selection mode
+            map.on('click', () => {
+                if (isSelecting && !isDrawingRect) {
+                    isSelecting = false;
+                    map.getContainer().style.cursor = '';
+                    map.dragging.enable();
+                    map.doubleClickZoom.enable();
+                }
+            });
+        }
+
+        /**
+         * Start rectangle selection.
+         */
+        function startRectangleSelection(latlng) {
+            isSelecting = false;
+            isDrawingRect = true;
+            selectionStart = latlng;
+            map.getContainer().style.cursor = 'crosshair';
+            map.dragging.disable();
+            map.doubleClickZoom.disable();
+
+            selectionRect = L.rectangle(
+                [[latlng.lat, latlng.lng], [latlng.lat, latlng.lng]],
+                { color: '#007bff', weight: 2, fillOpacity: 0.1, dashArray: '5, 5' }
+            ).addTo(selectionLayer);
+        }
+
+        /**
+         * Handle completed area selection.
+         */
+        async function onSelectionComplete(bounds) {
             try {
-                const overpassQuery = `
-                    [out:json][timeout:30];
-                    (
-                        way["highway"~"^(primary|secondary|tertiary|residential|unclassified)$"](${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()});
+                // Clear previous results
+                streetViewDotsLayer.clearLayers();
+                currentPoints = [];
+                currentPanoIds = [];
+
+                // Step 1: Fetch streets
+                showProgress('Fetching streets...');
+                const rawStreets = await fetchStreets(bounds);
+
+                if (rawStreets.length === 0) {
+                    showProgress('No streets found in selected area', false);
+                    setTimeout(hideProgress, 2000);
+                    return;
+                }
+
+                // Clip streets to selection bounds
+                const streets = clipStreetsToBounds(rawStreets, bounds);
+
+                // Display streets on map
+                displayStreets(streets);
+
+                // Step 2: Sample points along streets
+                showProgress(`Found ${streets.length} streets. Sampling viewpoints...`);
+                const allPoints = streets.flatMap(s => sampleStreetPoints(s, 50));
+
+                if (allPoints.length === 0) {
+                    showProgress('No viewpoints generated', false);
+                    setTimeout(hideProgress, 2000);
+                    return;
+                }
+
+                // Step 3: Get session token
+                showProgress(`Checking Street View coverage for ${allPoints.length} points...`);
+                let session;
+                try {
+                    session = await getSessionToken();
+                } catch (err) {
+                    showError(`Session error: ${err.message}`);
+                    hideProgress();
+                    return;
+                }
+
+                // Step 4: Batch fetch panoIds
+                const panoIds = [];
+                const BATCH_SIZE = 100;
+
+                for (let i = 0; i < allPoints.length; i += BATCH_SIZE) {
+                    const batch = allPoints.slice(i, i + BATCH_SIZE);
+                    updateProgress(
+                        Math.round((i / allPoints.length) * 100),
+                        `Checking batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(allPoints.length / BATCH_SIZE)}...`
                     );
-                    (._;>;);
-                    out geom;
-                `;
 
-                const response = await fetch('https://overpass-api.de/api/interpreter', {
-                    method: 'POST',
-                    body: overpassQuery
-                });
+                    try {
+                        const ids = await fetchPanoIds(batch, session);
+                        panoIds.push(...ids);
+                    } catch (err) {
+                        console.error('Batch fetch error:', err);
+                        showError(`Coverage check failed: ${err.message}`);
+                        hideProgress();
+                        return;
+                    }
 
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    // Small delay between batches to avoid rate limiting
+                    await new Promise(resolve => setTimeout(resolve, 50));
                 }
 
-                const data = await response.json();
-                highlightStreets(data);
+                // Step 5: Filter to points with coverage
+                const coveredPoints = [];
+                const coveredPanoIds = [];
 
-            } catch (error) {
-                console.error('Error fetching streets:', error);
-            }
-        }
-
-        // Convert Overpass data to GeoJSON
-        function overpassToGeoJSON(overpassData) {
-            const features = [];
-
-            // Process ways (roads)
-            if (overpassData.elements) {
-                overpassData.elements.forEach(element => {
-                    if (element.type === 'way' && element.geometry) {
-                        const coordinates = element.geometry.map(node => [node.lon, node.lat]);
-
-                        // Create feature with geometry
-                        const feature = {
-                            type: 'Feature',
-                            properties: {
-                                name: element.tags?.name || 'Unnamed street',
-                                highway: element.tags?.highway || 'road',
-                                id: element.id
-                            },
-                            geometry: {
-                                type: 'LineString',
-                                coordinates: coordinates
-                            }
-                        };
-
-                        // Apply smoothing and simplification
-                        const smoothedFeature = smoothStreetGeometry(feature);
-                        features.push(smoothedFeature);
-                    }
-                });
-            }
-
-            return {
-                type: 'FeatureCollection',
-                features: features
-            };
-        }
-
-        // Smooth and simplify street geometry
-        function smoothStreetGeometry(feature) {
-            try {
-                // Convert to Turf.js feature
-                const line = turf.lineString(feature.geometry.coordinates, feature.properties);
-
-                // Simplify the line (remove small artifacts)
-                const simplified = turf.simplify(line, {
-                    tolerance: 0.00001, // Very small tolerance to preserve main shape
-                    highQuality: false
-                });
-
-                // Smooth by removing very short segments
-                const coords = simplified.geometry.coordinates;
-                const smoothedCoords = [];
-
-                for (let i = 0; i < coords.length; i++) {
-                    if (i === 0 || i === coords.length - 1) {
-                        // Always keep first and last points
-                        smoothedCoords.push(coords[i]);
-                    } else {
-                        // Check if segment is long enough to keep
-                        const dist = turf.distance(
-                            turf.point(coords[i-1]),
-                            turf.point(coords[i]),
-                            { units: 'kilometers' }
-                        );
-
-                        // Keep point if it's at least 5 meters from previous point
-                        if (dist > 0.005) {
-                            smoothedCoords.push(coords[i]);
-                        }
+                for (let i = 0; i < allPoints.length; i++) {
+                    if (panoIds[i] && panoIds[i] !== '') {
+                        coveredPoints.push(allPoints[i]);
+                        coveredPanoIds.push(panoIds[i]);
                     }
                 }
 
-                return {
-                    type: 'Feature',
-                    properties: feature.properties,
-                    geometry: {
-                        type: 'LineString',
-                        coordinates: smoothedCoords
-                    }
-                };
-            } catch (error) {
-                console.warn('Error smoothing geometry:', error);
-                return feature; // Return original if smoothing fails
-            }
-        }
-
-        // Fetch street view images in batches within bounds
-        async function fetchStreetViewImagesInBounds(bounds) {
-            const bbox = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
-
-            if (!MAPILLARY_ACCESS_TOKEN || MAPILLARY_ACCESS_TOKEN === 'YOUR_MAPILLARY_TOKEN') {
-                showProgress('Mapillary API token not configured', false);
-                updateProgress(0, 'Please add a valid token to config.js');
-                document.getElementById('progressDetails').innerHTML = '<button onclick="hideProgress()" style="background: #6c757d;">Close</button>';
-                return 0;
-            }
-
-            streetViewDotsLayer.clearLayers();
-            showProgress('Fetching street view images...', true);
-
-            const BATCH_SIZE = 100;
-            let totalImages = 0;
-            let batchNum = 0;
-            let nextUrl = `${MAPILLARY_CONFIG.apiBase}/images?access_token=${MAPILLARY_ACCESS_TOKEN}&bbox=${bbox}&limit=${BATCH_SIZE}&fields=id,geometry,thumb_2048_url`;
-
-            try {
-                while (nextUrl) {
-                    batchNum++;
-                    updateProgress(0, `Fetching batch ${batchNum}...`);
-
-                    const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-                    const response = await fetch(nextUrl, { signal: controller.signal });
-                    clearTimeout(timeoutId);
-
-                    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-
-                    const data = await response.json();
-
-                    if (!data.data || data.data.length === 0) {
-                        if (totalImages === 0) {
-                            showProgress('No street view images found', false);
-                            setTimeout(hideProgress, 2000);
-                            return 0;
-                        }
-                        break;
-                    }
-
-                    // Add dots for this batch
-                    for (const image of data.data) {
-                        const [lng, lat] = image.geometry.coordinates;
-                        const dot = L.circleMarker([lat, lng], {
-                            radius: 6,
-                            fillColor: '#00ff00',
-                            color: '#008800',
-                            weight: 1,
-                            opacity: 0.8,
-                            fillOpacity: 0.6
-                        }).addTo(streetViewDotsLayer);
-
-                        dot.on('click', () => {
-                            document.getElementById('modalImage').src = image.thumb_2048_url;
-                            document.getElementById('imageModal').style.display = 'block';
-                        });
-                    }
-
-                    totalImages += data.data.length;
-                    updateProgress(0, `Loaded ${totalImages} images (batch ${batchNum})`);
-
-                    // Check for next page
-                    nextUrl = data.paging?.next || null;
-
-                    // Yield to browser
-                    await new Promise(resolve => setTimeout(resolve, 0));
+                if (coveredPoints.length === 0) {
+                    showProgress('No Street View coverage in selected area', false);
+                    setTimeout(hideProgress, 2000);
+                    return;
                 }
+
+                // Step 6: Display dots
+                currentPoints = coveredPoints;
+                currentPanoIds = coveredPanoIds;
+                displayDots(coveredPoints, coveredPanoIds);
 
                 showProgress('Complete!', false);
-                updateProgress(100, `Added ${totalImages} street view images`);
+                updateProgress(100, `Found ${coveredPoints.length} Street View locations`);
                 setTimeout(hideProgress, 2000);
-                return totalImages;
 
-            } catch (error) {
-                if (error.name === 'AbortError') {
-                    console.error('Request timed out');
-                    showProgress('Request timed out', false);
-                } else {
-                    console.error('Error fetching Mapillary:', error);
-                    showProgress('Failed to load images', false);
-                }
-                updateProgress(0, error.message);
-                document.getElementById('progressDetails').innerHTML = '<button onclick="hideProgress()" style="background: #6c757d;">Close</button>';
-                return totalImages;
+            } catch (err) {
+                console.error('Selection error:', err);
+                showError(`Error: ${err.message}`);
+                hideProgress();
             }
         }
 
-        // Highlight streets on the map
-        function highlightStreets(overpassData) {
-            const geojson = overpassToGeoJSON(overpassData);
+        /**
+         * Display streets on the map.
+         */
+        function displayStreets(streets) {
+            const geojson = waysToGeoJSON(streets);
 
-            const streetLayer = L.geoJSON(geojson, {
+            L.geoJSON(geojson, {
                 style: {
-                    color: '#000000',
-                    weight: 4,
-                    opacity: 0.9
+                    color: '#333',
+                    weight: 3,
+                    opacity: 0.7
                 },
                 onEachFeature: (feature, layer) => {
-                    if (feature.properties.name) {
-                        layer.bindPopup(`
-                            <strong>${feature.properties.name}</strong><br>
-                            Type: ${feature.properties.highway}<br>
-                            ID: ${feature.properties.id}
-                        `);
-                    }
+                    const name = feature.properties.name;
+                    const type = feature.properties.highway;
+                    const oneway = feature.properties.oneway;
+                    layer.bindPopup(`
+                        <strong>${name}</strong><br>
+                        Type: ${type}<br>
+                        ${oneway ? `One-way: ${oneway}` : 'Two-way'}
+                    `);
                 }
             }).addTo(streetsLayer);
-
-            // Add Mapillary availability dots along selected streets
-            addMapillaryDots(geojson)
-                .then(count => console.log(`Added ${count} Mapillary dots`))
-                .catch(err => console.error('Error adding Mapillary dots:', err));
-
-            const streetCount = geojson.features.length;
-
-            // Center map horizontally to fit all streets
-            if (geojson.features.length > 0) {
-                const bounds = streetLayer.getBounds();
-                if (bounds.isValid()) {
-                    const center = bounds.getCenter();
-                    map.setView(center, map.getZoom());
-                }
-            }
         }
 
-        // Progress bar helper functions
-        function showProgress(title, showIndeterminate = true) {
-            const container = document.getElementById('progressContainer');
-            const text = document.getElementById('progressText');
-            const bar = document.getElementById('progressBar');
-            const details = document.getElementById('progressDetails');
+        /**
+         * Display Street View coverage dots.
+         */
+        function displayDots(points, panoIds) {
+            for (let i = 0; i < points.length; i++) {
+                const point = points[i];
+                const panoId = panoIds[i];
 
-            text.textContent = title;
-            details.textContent = '';
-
-            if (showIndeterminate) {
-                bar.classList.add('indeterminate');
-            } else {
-                bar.classList.remove('indeterminate');
-                bar.style.width = '0%';
-            }
-
-            container.style.display = 'block';
-            setTimeout(() => container.classList.add('visible'), 10);
-        }
-
-        function updateProgress(percent, details = '') {
-            const bar = document.getElementById('progressBar');
-            const detailsEl = document.getElementById('progressDetails');
-
-            bar.style.width = `${percent}%`;
-            detailsEl.textContent = details;
-        }
-
-        function hideProgress() {
-            const container = document.getElementById('progressContainer');
-            container.classList.remove('visible');
-            setTimeout(() => {
-                container.style.display = 'none';
-            }, 300);
-        }
-
-        async function processBatch(images, startIdx, batchSize, totalImages) {
-            const endIdx = Math.min(startIdx + batchSize, images.length);
-
-            for (let i = startIdx; i < endIdx; i++) {
-                const image = images[i];
-                const [lng, lat] = image.geometry.coordinates;
-
-                const dot = L.circleMarker([lat, lng], {
+                const dot = L.circleMarker([point.lat, point.lon], {
                     radius: 6,
-                    fillColor: '#00ff00',
-                    color: '#008800',
-                    weight: 1,
-                    opacity: 0.8,
-                    fillOpacity: 0.6
+                    fillColor: '#4285f4',
+                    color: '#1a73e8',
+                    weight: 2,
+                    opacity: 0.9,
+                    fillOpacity: 0.7
                 }).addTo(streetViewDotsLayer);
 
-                dot.on('click', () => {
-                    document.getElementById('modalImage').src = image.thumb_2048_url;
-                    document.getElementById('imageModal').style.display = 'block';
+                // Store index for click handler
+                dot.pointIndex = i;
+
+                dot.on('click', () => onDotClick(i));
+
+                // Tooltip with street name
+                dot.bindTooltip(point.streetName, {
+                    permanent: false,
+                    direction: 'top'
                 });
             }
-
-            return endIdx - startIdx;
         }
 
+        /**
+         * Handle dot click - open panorama.
+         */
+        function onDotClick(index) {
+            const point = currentPoints[index];
+            const panoId = currentPanoIds[index];
 
-        </script>
+            if (!point || !panoId) return;
+
+            const side = document.getElementById('sideToggle').value;
+            const heading = calculateDriverHeading(point.bearing, point.oneway, side);
+
+            // Show modal
+            document.getElementById('panoramaModal').classList.add('visible');
+
+            // Open panorama
+            openPanorama(panoId, heading, document.getElementById('panoramaContainer'));
+        }
+
+        /**
+         * Close panorama modal.
+         */
+        function closePanoramaModal() {
+            document.getElementById('panoramaModal').classList.remove('visible');
+        }
+    </script>
 </body>
 </html>

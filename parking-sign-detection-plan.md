@@ -21,7 +21,7 @@ Use existing models to get working prototype quickly.
 - Extract GPS and camera pose metadata
 
 **2. Use Pre-trained Models**
-- YOLOv8 for traffic sign detection
+- YOLO11 for traffic sign detection
 - PaddleOCR for text extraction
 - Simple regex-based rule parser
 
@@ -41,7 +41,7 @@ Improve accuracy with domain-specific models.
   - Valid days/times
 
 **2. Model Fine-tuning**
-- Fine-tune YOLOv8 on parking signs
+- Fine-tune YOLO11 on parking signs
 - Train custom OCR model for sign fonts
 - Add confidence scoring
 
@@ -120,8 +120,8 @@ GET https://graph.mapillary.com/image_sequences
 
 ### Option A: Transfer Learning (Recommended)
 ```python
-# Base model: YOLOv8
-model = YOLO('yolov8n.pt')
+# Base model: YOLO11
+model = YOLO('yolo11n.pt')
 results = model.train(
     data='parking_signs.yaml',
     epochs=100,
@@ -168,7 +168,7 @@ CREATE EXTENSION postgis;
 ├── backend/
 │   ├── server.py                 # FastAPI backend
 │   ├── models/
-│   │   ├── detection.py          # YOLOv8 wrapper
+│   │   ├── detection.py          # YOLO11 wrapper
 │   │   └── ocr.py                # PaddleOCR wrapper
 │   ├── database/
 │   │   ├── connection.py         # Postgres client
@@ -211,7 +211,7 @@ CREATE EXTENSION postgis;
 ## Next Steps
 1. Get Mapillary developer access
 2. Set up PostgreSQL + PostGIS
-3. Implement basic YOLOv8 detection
+3. Implement basic YOLO11 detection
 4. Add PaddleOCR for text
 5. Create map visualization layer
 6. Deploy prototype to test area
