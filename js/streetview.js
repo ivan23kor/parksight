@@ -160,11 +160,8 @@ function openPanorama(panoId, heading, containerEl) {
             motionTracking: false,
             motionTrackingControl: false
         });
-        // Allow zoom up to 8x
+        // Allow unlimited zoom (Google API caps at its own limit)
         panoramaInstance.set('zoom', pov.zoom);
-        if (panoramaInstance.setMaxZoom) {
-            panoramaInstance.setMaxZoom(8);
-        }
     } else {
         panoramaInstance.setPano(panoId);
         panoramaInstance.setPov(pov);

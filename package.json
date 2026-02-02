@@ -3,10 +3,9 @@
   "version": "1.0.0",
   "description": "Free Parking - Map & Upload detection UIs",
   "scripts": {
-    "serve": "python3 -m http.server 8080",
-    "serve:map": "cd ui-map && python3 -m http.server 8080",
-    "build:upload": "cd ui-upload && bun run build",
-    "serve:upload": "cd ui-upload/out && python3 -m http.server 8080"
+    "build": "cd ui-upload && bun install && bun run build",
+    "serve": "bunx --yes serve -l 8080",
+    "start": "npm run build && npm run serve"
   },
   "keywords": [
     "parking",
