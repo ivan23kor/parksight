@@ -1,24 +1,19 @@
 {
-  "name": "map-overlay-app",
+  "name": "free-parking",
   "version": "1.0.0",
-  "description": "Interactive map visualization tool with overlay and street selection features",
-  "main": "src/index.html",
+  "description": "Free Parking - Map & Upload detection UIs",
   "scripts": {
-    "serve": "python3 -m http.server 8080 --bind 127.0.0.1",
-    "serve:dist": "cd dist && python3 -m http.server 8081 --bind 127.0.0.1",
-    "build": "cp src/index.html dist/index.html"
+    "serve": "python3 -m http.server 8080",
+    "serve:map": "cd ui-map && python3 -m http.server 8080",
+    "build:upload": "cd ui-upload && bun run build",
+    "serve:upload": "cd ui-upload/out && python3 -m http.server 8080"
   },
   "keywords": [
-    "map",
-    "visualization",
-    "leaflet",
-    "geojson",
-    "overpass",
-    "openstreetmap"
+    "parking",
+    "detection",
+    "yolo",
+    "street-view"
   ],
-  "author": "Map Overlay App",
-  "license": "MIT",
-  "dependencies": {
-    "leaflet": "^1.9.4"
-  }
+  "author": "",
+  "license": "MIT"
 }

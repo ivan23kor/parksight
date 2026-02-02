@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
 from pydantic import BaseModel
@@ -129,6 +129,61 @@ async def detect(request: DetectionRequest):
                     class_name=model.names[cls_id],
                 ))
     
+    return DetectionResponse(
+        detections=detections,
+        inference_time_ms=round(inference_time_ms, 1),
+        image_width=image_width,
+        image_height=image_height,
+    )
+
+
+@app.post("/detect-file", response_model=DetectionResponse)
+async def detect_file(file: UploadFile = File(...), confidence: float = 0.15):
+    """
+    Run parking sign detection on an uploaded file.
+
+    Args:
+        file: Uploaded image file
+        confidence: Optional confidence threshold
+
+    Returns:
+        DetectionResponse with bounding boxes and inference time
+    """
+    # Read file
+    image_bytes = await file.read()
+
+    # Save image for debugging/dataset analysis
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    image_path = DETECTION_IMAGES_DIR / f"detection_{timestamp}.jpg"
+    image_path.write_bytes(image_bytes)
+
+    # Load image
+    try:
+        image = Image.open(io.BytesIO(image_bytes))
+        image_width, image_height = image.size
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to load image: {e}")
+
+    # Run inference
+    start_time = time.time()
+    results = model.predict(image, conf=confidence, verbose=False)
+    inference_time_ms = (time.time() - start_time) * 1000
+
+    # Parse results
+    detections = []
+    for r in results:
+        if r.boxes is not None:
+            for box in r.boxes:
+                cls_id = int(box.cls[0])
+                detections.append(Detection(
+                    x1=float(box.xyxy[0][0]),
+                    y1=float(box.xyxy[0][1]),
+                    x2=float(box.xyxy[0][2]),
+                    y2=float(box.xyxy[0][3]),
+                    confidence=float(box.conf[0]),
+                    class_name=model.names[cls_id],
+                ))
+
     return DetectionResponse(
         detections=detections,
         inference_time_ms=round(inference_time_ms, 1),

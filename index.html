@@ -3,711 +3,79 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Street View Driver Perspective</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <title>Free Parking - Select UI</title>
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-
         body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            height: 100vh;
-        }
-
-        #map {
-            width: 100%;
-            height: 100%;
-        }
-
-        button {
-            background: #007cba;
-            color: white;
-            border: none;
-            padding: 8px 15px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-            margin-right: 10px;
-        }
-
-        button:hover {
-            background: #005a87;
-        }
-
-        select {
-            padding: 8px 12px;
-            border-radius: 4px;
-            border: 1px solid #ccc;
-            font-size: 14px;
-            cursor: pointer;
-        }
-
-        .controls {
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            z-index: 1000;
-            background: white;
-            padding: 10px;
-            border-radius: 5px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            min-height: 100vh;
             display: flex;
-            gap: 10px;
             align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
         }
-
-        .controls button {
-            margin-right: 0;
-        }
-
-        #progressContainer {
-            opacity: 0;
-            transition: opacity 0.3s ease;
-        }
-
-        #progressContainer.visible {
-            opacity: 1;
-        }
-
-        #progressBar.indeterminate {
-            background: linear-gradient(90deg, #007cba 30%, #005a87 50%, #007cba 70%);
-            background-size: 200% 100%;
-            animation: indeterminate 1.5s infinite;
-        }
-
-        @keyframes indeterminate {
-            0% { background-position: -200% 0; }
-            100% { background-position: 200% 0; }
-        }
-
-        /* Panorama Modal */
-        #panoramaModal {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
+        .container {
+            max-width: 600px;
             width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.9);
-            z-index: 2000;
-        }
-
-        #panoramaModal.visible {
-            display: block;
-        }
-
-        #panoramaContainer {
-            width: 100%;
-            height: 100%;
-        }
-
-        #closePanorama {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            z-index: 2001;
-            background: rgba(255,255,255,0.9);
-            color: #333;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-        }
-
-        #closePanorama:hover {
-            background: white;
-        }
-
-        /* Detection Modal */
-        #detectionModal {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.95);
-            z-index: 2000;
-        }
-
-        #detectionModal.visible {
-            display: block;
-        }
-
-        #detectionControls {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            z-index: 2001;
-            display: flex;
-            gap: 10px;
-        }
-
-        #detectionControls button {
-            background: rgba(255,255,255,0.9);
-            color: #333;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-        }
-
-        #detectionControls button:hover {
-            background: white;
-        }
-
-        #detectionPanorama {
-            width: 100%;
-            height: 100%;
-            position: relative;
-        }
-
-        #detectionOverlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: 100;
-        }
-
-        .detection-box {
-            position: absolute;
-            border: 3px solid;
-            box-sizing: border-box;
-            pointer-events: none;
-        }
-
-        .detection-label {
-            position: absolute;
-            top: -22px;
-            left: 0;
-            padding: 2px 6px;
-            font-size: 12px;
-            font-weight: bold;
-            color: white;
-            white-space: nowrap;
-            border-radius: 2px;
-        }
-
-        #detectionStatus {
-            position: absolute;
-            bottom: 60px;
-            left: 50%;
-            transform: translateX(-50%);
-            color: white;
-            font-size: 16px;
             text-align: center;
-            background: rgba(0,0,0,0.7);
-            padding: 8px 16px;
-            border-radius: 4px;
-            z-index: 101;
         }
-
-        #detectionInfo {
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            color: rgba(255,255,255,0.7);
-            font-size: 12px;
+        h1 {
+            color: white;
+            margin-bottom: 40px;
+            font-size: 2.5rem;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .ui-card {
+            display: block;
+            padding: 30px;
+            margin: 20px 0;
+            background: white;
+            text-decoration: none;
+            color: #333;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        }
+        .ui-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 15px rgba(0,0,0,0.2);
+            background: #f8f9fa;
+        }
+        .ui-icon {
+            font-size: 3rem;
+            margin-bottom: 10px;
+        }
+        .ui-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .ui-description {
+            color: #666;
+            font-size: 0.95rem;
         }
     </style>
 </head>
 <body>
-    <div class="controls">
-        <button id="selectStreets">Select Area (Ctrl+Drag)</button>
-        <select id="sideToggle">
-            <option value="right">Right side</option>
-            <option value="left">Left side</option>
-        </select>
-        <button id="clearStreets" style="background: #dc3545;">Clear</button>
+    <div class="container">
+        <h1>Free Parking Detection</h1>
+
+        <a href="ui-map/" class="ui-card">
+            <div class="ui-icon">📍</div>
+            <div class="ui-title">Map & Street View Detection</div>
+            <div class="ui-description">Select an area on the map to detect parking signs using Street View imagery</div>
+        </a>
+
+        <a href="ui-upload/out/" class="ui-card">
+            <div class="ui-icon">📤</div>
+            <div class="ui-title">Image Upload Detection</div>
+            <div class="ui-description">Upload images or provide URLs to detect parking signs</div>
+        </a>
     </div>
-
-    <div id="map"></div>
-
-    <!-- Progress Bar Container -->
-    <div id="progressContainer" style="display: none; position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 1500; background: white; padding: 15px 30px; border-radius: 0 0 8px 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); min-width: 350px;">
-        <div id="progressText" style="margin-bottom: 8px; font-size: 14px; color: #333; text-align: center;">Loading...</div>
-        <div style="width: 100%; height: 6px; background: #e0e0e0; border-radius: 3px; overflow: hidden;">
-            <div id="progressBar" style="height: 100%; background: #007cba; width: 0%; transition: width 0.3s ease; border-radius: 3px;"></div>
-        </div>
-        <div id="progressDetails" style="margin-top: 5px; font-size: 12px; color: #666; text-align: center;"></div>
-    </div>
-
-    <!-- Panorama Modal -->
-    <div id="panoramaModal">
-        <button id="closePanorama">✕ Close</button>
-        <div id="panoramaContainer"></div>
-    </div>
-
-    <!-- Detection Modal -->
-    <div id="detectionModal">
-        <div id="detectionControls">
-            <button id="redetectBtn">🔍 Detect</button>
-            <button id="closeDetection">✕ Close</button>
-        </div>
-        <div id="detectionPanorama"></div>
-        <svg id="detectionOverlay"></svg>
-        <div id="detectionStatus">Loading...</div>
-        <div id="detectionInfo"></div>
-    </div>
-
-    <!-- External Libraries -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
-    
-    <!-- Config and Modules -->
-    <script src="config.js"></script>
-    <script src="js/utils.js"></script>
-    <script src="js/streets.js"></script>
-    <script src="js/streetview.js"></script>
-    <script src="js/detection.js"></script>
-
-    <!-- Google Maps API (loaded after config.js so we have the API key) -->
-    <script>
-        // Load Google Maps API dynamically
-        (function loadGoogleMapsAPI() {
-            const apiKey = window.GOOGLE_CONFIG?.API_KEY;
-            if (!apiKey) {
-                console.error('Google API key not configured');
-                return;
-            }
-            const script = document.createElement('script');
-            script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=streetview&callback=initApp`;
-            script.async = true;
-            script.defer = true;
-            document.head.appendChild(script);
-        })();
-    </script>
-
-    <script>
-        // Global state
-        let map;
-        let streetsLayer;
-        let streetViewDotsLayer;
-        let selectionLayer;
-        let isSelecting = false;
-        let isDrawingRect = false;
-        let selectionStart = null;
-        let selectionRect = null;
-
-        // Store point data for click handlers
-        let currentPoints = [];
-        let currentPanoIds = [];
-
-        /**
-         * Initialize the application after Google Maps API loads.
-         */
-        function initApp() {
-            // Check API key
-            if (!window.GOOGLE_CONFIG?.API_KEY) {
-                showError('Google API key not configured. Please add it to config.js');
-                return;
-            }
-
-            // Initialize Leaflet map
-            map = L.map('map').setView([51.04, -114.0686], 16);
-
-            // Add tile layer
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap contributors'
-            }).addTo(map);
-
-            // Initialize layers
-            streetsLayer = L.layerGroup().addTo(map);
-            streetViewDotsLayer = L.layerGroup().addTo(map);
-            selectionLayer = L.layerGroup().addTo(map);
-
-            // Set up event handlers
-            setupEventHandlers();
-
-            console.log('App initialized');
-        }
-
-        /**
-         * Set up UI event handlers.
-         */
-        function setupEventHandlers() {
-            // Select button
-            document.getElementById('selectStreets').addEventListener('click', () => {
-                isSelecting = true;
-                map.getContainer().style.cursor = 'crosshair';
-                map.dragging.disable();
-                map.doubleClickZoom.disable();
-            });
-
-            // Clear button
-            document.getElementById('clearStreets').addEventListener('click', () => {
-                streetsLayer.clearLayers();
-                streetViewDotsLayer.clearLayers();
-                currentPoints = [];
-                currentPanoIds = [];
-            });
-
-            // Close panorama modal
-            document.getElementById('closePanorama').addEventListener('click', closePanoramaModal);
-            document.getElementById('panoramaModal').addEventListener('click', (e) => {
-                if (e.target.id === 'panoramaModal') {
-                    closePanoramaModal();
-                }
-            });
-
-            // Detection modal controls
-            document.getElementById('closeDetection').addEventListener('click', closeDetectionModal);
-            document.getElementById('redetectBtn').addEventListener('click', rerunDetection);
-            document.getElementById('detectionModal').addEventListener('click', (e) => {
-                if (e.target.id === 'detectionModal') {
-                    closeDetectionModal();
-                }
-            });
-
-            // Escape key to close modals
-            document.addEventListener('keydown', (e) => {
-                if (e.key === 'Escape') {
-                    closePanoramaModal();
-                    closeDetectionModal();
-                }
-            });
-
-            // Hold Ctrl to enable selection mode
-            document.addEventListener('keydown', (e) => {
-                if (e.key === 'Control' || e.ctrlKey) {
-                    const detectionOpen = document.getElementById('detectionModal').classList.contains('visible');
-                    const panoramaOpen = document.getElementById('panoramaModal').classList.contains('visible');
-                    if (detectionOpen || panoramaOpen) return;
-                    isSelecting = true;
-                    map.getContainer().style.cursor = 'crosshair';
-                }
-            });
-
-            document.addEventListener('keyup', (e) => {
-                if (e.key === 'Control') {
-                    if (!isDrawingRect) {
-                        isSelecting = false;
-                        map.getContainer().style.cursor = '';
-                        map.dragging.enable();
-                        map.doubleClickZoom.enable();
-                    }
-                }
-            });
-
-            // Ctrl+Click shortcut for selection
-            map.on('mousedown', (e) => {
-                if (e.originalEvent.ctrlKey || e.originalEvent.metaKey) {
-                    e.originalEvent.preventDefault();
-                    startRectangleSelection(e.latlng);
-                }
-            });
-
-            // Regular selection mode mousedown
-            map.on('mousedown', (e) => {
-                if (!isSelecting || e.originalEvent.ctrlKey || e.originalEvent.metaKey) return;
-                L.DomEvent.preventDefault(e.originalEvent);
-                L.DomEvent.stopPropagation(e.originalEvent);
-                startRectangleSelection(e.latlng);
-            });
-
-            // Mouse move during selection
-            map.on('mousemove', (e) => {
-                if (!isDrawingRect || !selectionRect) return;
-                L.DomEvent.preventDefault(e.originalEvent);
-                L.DomEvent.stopPropagation(e.originalEvent);
-                const bounds = L.latLngBounds(selectionStart, e.latlng);
-                selectionRect.setBounds(bounds);
-            });
-
-            // Mouse up to complete selection
-            map.on('mouseup', async (e) => {
-                if (!isDrawingRect || !selectionRect) return;
-                L.DomEvent.preventDefault(e.originalEvent);
-                L.DomEvent.stopPropagation(e.originalEvent);
-
-                const bounds = selectionRect.getBounds();
-                selectionRect.remove();
-                selectionRect = null;
-                isDrawingRect = false;
-
-                // Re-enable map controls
-                map.getContainer().style.cursor = '';
-                map.dragging.enable();
-                map.doubleClickZoom.enable();
-
-                await onSelectionComplete(bounds);
-            });
-
-            // Click to cancel selection mode
-            map.on('click', () => {
-                if (isSelecting && !isDrawingRect) {
-                    isSelecting = false;
-                    map.getContainer().style.cursor = '';
-                    map.dragging.enable();
-                    map.doubleClickZoom.enable();
-                }
-            });
-        }
-
-        /**
-         * Start rectangle selection.
-         */
-        function startRectangleSelection(latlng) {
-            isSelecting = false;
-            isDrawingRect = true;
-            selectionStart = latlng;
-            map.getContainer().style.cursor = 'crosshair';
-            map.dragging.disable();
-            map.doubleClickZoom.disable();
-
-            selectionRect = L.rectangle(
-                [[latlng.lat, latlng.lng], [latlng.lat, latlng.lng]],
-                { color: '#007bff', weight: 2, fillOpacity: 0.1, dashArray: '5, 5' }
-            ).addTo(selectionLayer);
-        }
-
-        /**
-         * Handle completed area selection.
-         */
-        async function onSelectionComplete(bounds) {
-            try {
-                // Clear previous results
-                streetViewDotsLayer.clearLayers();
-                currentPoints = [];
-                currentPanoIds = [];
-
-                // Step 1: Fetch streets
-                showProgress('Fetching streets...');
-                const rawStreets = await fetchStreets(bounds);
-
-                if (rawStreets.length === 0) {
-                    showProgress('No streets found in selected area', false);
-                    setTimeout(hideProgress, 2000);
-                    return;
-                }
-
-                // Clip streets to selection bounds
-                const streets = clipStreetsToBounds(rawStreets, bounds);
-
-                // Display streets on map
-                displayStreets(streets);
-
-                // Step 2: Sample points along streets
-                showProgress(`Found ${streets.length} streets. Sampling viewpoints...`);
-                const allPoints = streets.flatMap(s => sampleStreetPoints(s, 50));
-
-                if (allPoints.length === 0) {
-                    showProgress('No viewpoints generated', false);
-                    setTimeout(hideProgress, 2000);
-                    return;
-                }
-
-                // Step 3: Get session token
-                showProgress(`Checking Street View coverage for ${allPoints.length} points...`);
-                let session;
-                try {
-                    session = await getSessionToken();
-                } catch (err) {
-                    showError(`Session error: ${err.message}`);
-                    hideProgress();
-                    return;
-                }
-
-                // Step 4: Batch fetch panoIds
-                const panoIds = [];
-                const BATCH_SIZE = 100;
-
-                for (let i = 0; i < allPoints.length; i += BATCH_SIZE) {
-                    const batch = allPoints.slice(i, i + BATCH_SIZE);
-                    updateProgress(
-                        Math.round((i / allPoints.length) * 100),
-                        `Checking batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(allPoints.length / BATCH_SIZE)}...`
-                    );
-
-                    try {
-                        const ids = await fetchPanoIds(batch, session);
-                        panoIds.push(...ids);
-                    } catch (err) {
-                        console.error('Batch fetch error:', err);
-                        showError(`Coverage check failed: ${err.message}`);
-                        hideProgress();
-                        return;
-                    }
-
-                    // Small delay between batches to avoid rate limiting
-                    await new Promise(resolve => setTimeout(resolve, 50));
-                }
-
-                // Step 5: Filter to points with coverage
-                const coveredPoints = [];
-                const coveredPanoIds = [];
-
-                for (let i = 0; i < allPoints.length; i++) {
-                    if (panoIds[i] && panoIds[i] !== '') {
-                        coveredPoints.push(allPoints[i]);
-                        coveredPanoIds.push(panoIds[i]);
-                    }
-                }
-
-                if (coveredPoints.length === 0) {
-                    showProgress('No Street View coverage in selected area', false);
-                    setTimeout(hideProgress, 2000);
-                    return;
-                }
-
-                // Step 6: Display dots
-                currentPoints = coveredPoints;
-                currentPanoIds = coveredPanoIds;
-                displayDots(coveredPoints, coveredPanoIds);
-
-                showProgress('Complete!', false);
-                updateProgress(100, `Found ${coveredPoints.length} Street View locations`);
-                setTimeout(hideProgress, 2000);
-
-            } catch (err) {
-                console.error('Selection error:', err);
-                showError(`Error: ${err.message}`);
-                hideProgress();
-            }
-        }
-
-        /**
-         * Display streets on the map.
-         */
-        function displayStreets(streets) {
-            const geojson = waysToGeoJSON(streets);
-
-            L.geoJSON(geojson, {
-                style: {
-                    color: '#333',
-                    weight: 3,
-                    opacity: 0.7
-                },
-                onEachFeature: (feature, layer) => {
-                    const name = feature.properties.name;
-                    const type = feature.properties.highway;
-                    const oneway = feature.properties.oneway;
-                    layer.bindPopup(`
-                        <strong>${name}</strong><br>
-                        Type: ${type}<br>
-                        ${oneway ? `One-way: ${oneway}` : 'Two-way'}
-                    `);
-                }
-            }).addTo(streetsLayer);
-        }
-
-        /**
-         * Display Street View coverage dots.
-         */
-        function displayDots(points, panoIds) {
-            for (let i = 0; i < points.length; i++) {
-                const point = points[i];
-                const panoId = panoIds[i];
-
-                const dot = L.circleMarker([point.lat, point.lon], {
-                    radius: 6,
-                    fillColor: '#4285f4',
-                    color: '#1a73e8',
-                    weight: 2,
-                    opacity: 0.9,
-                    fillOpacity: 0.7
-                }).addTo(streetViewDotsLayer);
-
-                // Store index for click handler
-                dot.pointIndex = i;
-
-                dot.on('click', () => onDotClick(i));
-
-                // Tooltip with street name
-                dot.bindTooltip(point.streetName, {
-                    permanent: false,
-                    direction: 'top'
-                });
-            }
-        }
-
-        // Store current detection context
-        let currentDetectionContext = null;
-
-        /**
-         * Handle dot click - run detection and show results.
-         */
-        async function onDotClick(index) {
-            await showDetectionForIndex(index);
-        }
-
-        /**
-         * Show detection for a given point index.
-         */
-        async function showDetectionForIndex(index) {
-            const point = currentPoints[index];
-            const panoId = currentPanoIds[index];
-
-            if (!point || !panoId) return;
-
-            const side = document.getElementById('sideToggle').value;
-            const heading = calculateDriverHeading(point.bearing, point.oneway, side);
-
-            // Store context for detection
-            currentDetectionContext = { panoId, heading };
-
-            // Show detection modal
-            const modal = document.getElementById('detectionModal');
-            const statusEl = document.getElementById('detectionStatus');
-            const infoEl = document.getElementById('detectionInfo');
-
-            modal.classList.add('visible');
-            statusEl.textContent = 'Loading panorama...';
-
-            const streetName = point.streetName || 'Unknown street';
-            infoEl.textContent = `${streetName} • Heading: ${Math.round(heading)}°`;
-
-            // Initialize panorama
-            const container = document.getElementById('detectionPanorama');
-            initDetectionPanorama(panoId, heading, container);
-
-            // Update status - no auto-detection, user clicks Re-detect
-            statusEl.textContent = 'Click "Detect" to scan for parking signs';
-        }
-
-        /**
-         * Re-run detection at current panorama POV (visible area only).
-         */
-        async function rerunDetection() {
-            if (!currentDetectionContext || !detectionPanorama) return;
-
-            const { panoId } = currentDetectionContext;
-            const statusEl = document.getElementById('detectionStatus');
-
-            try {
-                // Use current POV (heading, pitch, zoom/FOV) for detection
-                await runDetectionOnPanorama(panoId, null, statusEl, true);
-            } catch (err) {
-                console.error('Re-detection failed:', err);
-                statusEl.textContent = 'Detection failed.';
-            }
-        }
-
-        /**
-         * Close detection modal.
-         */
-        function closeDetectionModal() {
-            document.getElementById('detectionModal').classList.remove('visible');
-            cleanupDetectionPanorama();
-            currentDetectionContext = null;
-        }
-
-        /**
-         * Close panorama modal.
-         */
-        function closePanoramaModal() {
-            document.getElementById('panoramaModal').classList.remove('visible');
-        }
-    </script>
 </body>
 </html>
