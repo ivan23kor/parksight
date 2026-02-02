@@ -137,10 +137,7 @@
         }
 
         #detectionModal.visible {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
+            display: block;
         }
 
         #detectionControls {
@@ -150,63 +147,6 @@
             z-index: 2001;
             display: flex;
             gap: 10px;
-        }
-
-        #previewContainer {
-            position: relative;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 100%;
-        }
-
-        #imageWrapper {
-            position: relative;
-            display: inline-block;
-        }
-
-        #streetNavControls {
-            position: absolute;
-            left: -70px;
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-            z-index: 2001;
-        }
-
-        #streetNavControlsRight {
-            position: absolute;
-            right: -70px;
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-            z-index: 2001;
-        }
-
-        #streetNavControls button,
-        #streetNavControlsRight button {
-            background: rgba(255,255,255,0.9);
-            color: #333;
-            border: none;
-            padding: 12px 14px;
-            border-radius: 999px;
-            cursor: pointer;
-            font-size: 16px;
-            pointer-events: auto;
-            min-width: 44px;
-            min-height: 44px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        #streetNavControls button:hover:not(:disabled) {
-            background: white;
-        }
-
-        #streetNavControls button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
         }
 
         #detectionControls button {
@@ -223,18 +163,53 @@
             background: white;
         }
 
-        #detectionCanvas {
-            max-width: 70vw;
-            max-height: 70vh;
-            border-radius: 8px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        #detectionPanorama {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+
+        #detectionOverlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 100;
+        }
+
+        .detection-box {
+            position: absolute;
+            border: 3px solid;
+            box-sizing: border-box;
+            pointer-events: none;
+        }
+
+        .detection-label {
+            position: absolute;
+            top: -22px;
+            left: 0;
+            padding: 2px 6px;
+            font-size: 12px;
+            font-weight: bold;
+            color: white;
+            white-space: nowrap;
+            border-radius: 2px;
         }
 
         #detectionStatus {
+            position: absolute;
+            bottom: 60px;
+            left: 50%;
+            transform: translateX(-50%);
             color: white;
-            margin-top: 15px;
             font-size: 16px;
             text-align: center;
+            background: rgba(0,0,0,0.7);
+            padding: 8px 16px;
+            border-radius: 4px;
+            z-index: 101;
         }
 
         #detectionInfo {
@@ -276,20 +251,11 @@
     <!-- Detection Modal -->
     <div id="detectionModal">
         <div id="detectionControls">
-            <button id="view360Btn">🔄 View 360°</button>
+            <button id="redetectBtn">🔍 Detect</button>
             <button id="closeDetection">✕ Close</button>
         </div>
-        <div id="previewContainer">
-            <div id="streetNavControls">
-                <button id="prevPanoBtn" aria-label="Previous panorama">◀</button>
-            </div>
-            <div id="imageWrapper">
-                <canvas id="detectionCanvas"></canvas>
-            </div>
-            <div id="streetNavControlsRight">
-                <button id="nextPanoBtn" aria-label="Next panorama">▶</button>
-            </div>
-        </div>
+        <div id="detectionPanorama"></div>
+        <svg id="detectionOverlay"></svg>
         <div id="detectionStatus">Loading...</div>
         <div id="detectionInfo"></div>
     </div>
@@ -396,9 +362,7 @@
 
             // Detection modal controls
             document.getElementById('closeDetection').addEventListener('click', closeDetectionModal);
-            document.getElementById('view360Btn').addEventListener('click', openCurrentIn360);
-            document.getElementById('prevPanoBtn').addEventListener('click', () => navigateStreet(-1));
-            document.getElementById('nextPanoBtn').addEventListener('click', () => navigateStreet(1));
+            document.getElementById('redetectBtn').addEventListener('click', rerunDetection);
             document.getElementById('detectionModal').addEventListener('click', (e) => {
                 if (e.target.id === 'detectionModal') {
                     closeDetectionModal();
@@ -667,7 +631,7 @@
             }
         }
 
-        // Store current detection context for navigation and "View 360°" button
+        // Store current detection context
         let currentDetectionContext = null;
 
         /**
@@ -689,68 +653,44 @@
             const side = document.getElementById('sideToggle').value;
             const heading = calculateDriverHeading(point.bearing, point.oneway, side);
 
-            // Store context for navigation and 360 view
-            currentDetectionContext = { panoId, heading, point, index };
+            // Store context for detection
+            currentDetectionContext = { panoId, heading };
 
             // Show detection modal
             const modal = document.getElementById('detectionModal');
-            const canvas = document.getElementById('detectionCanvas');
             const statusEl = document.getElementById('detectionStatus');
             const infoEl = document.getElementById('detectionInfo');
 
             modal.classList.add('visible');
-            statusEl.textContent = 'Loading...';
+            statusEl.textContent = 'Loading panorama...';
 
             const streetName = point.streetName || 'Unknown street';
-            const { prevIndex, nextIndex, positionInfo } = getStreetNavInfo(index);
-            document.getElementById('prevPanoBtn').disabled = prevIndex === null;
-            document.getElementById('nextPanoBtn').disabled = nextIndex === null;
-            infoEl.textContent = `${streetName} • ${positionInfo} • Heading: ${Math.round(heading)}°`;
+            infoEl.textContent = `${streetName} • Heading: ${Math.round(heading)}°`;
 
-            // Run detection
+            // Initialize panorama
+            const container = document.getElementById('detectionPanorama');
+            initDetectionPanorama(panoId, heading, container);
+
+            // Update status - no auto-detection, user clicks Re-detect
+            statusEl.textContent = 'Click "Detect" to scan for parking signs';
+        }
+
+        /**
+         * Re-run detection at current panorama POV (visible area only).
+         */
+        async function rerunDetection() {
+            if (!currentDetectionContext || !detectionPanorama) return;
+
+            const { panoId } = currentDetectionContext;
+            const statusEl = document.getElementById('detectionStatus');
+
             try {
-                await detectAndRender(panoId, heading, canvas, statusEl);
+                // Use current POV (heading, pitch, zoom/FOV) for detection
+                await runDetectionOnPanorama(panoId, null, statusEl, true);
             } catch (err) {
-                // If detection fails, offer to view in 360
-                console.error('Detection failed:', err);
-                statusEl.textContent = 'Detection unavailable. Click "View 360°" to see panorama.';
+                console.error('Re-detection failed:', err);
+                statusEl.textContent = 'Detection failed.';
             }
-        }
-
-        /**
-         * Get previous/next index on the same street.
-         */
-        function getStreetNavInfo(currentIndex) {
-            const current = currentPoints[currentIndex];
-            if (!current) return { prevIndex: null, nextIndex: null, positionInfo: '' };
-
-            const streetName = current.streetName || '';
-            const sameStreetIndices = [];
-
-            for (let i = 0; i < currentPoints.length; i++) {
-                if ((currentPoints[i].streetName || '') === streetName) {
-                    sameStreetIndices.push(i);
-                }
-            }
-
-            const pos = sameStreetIndices.indexOf(currentIndex);
-            const prevIndex = pos > 0 ? sameStreetIndices[pos - 1] : null;
-            const nextIndex = pos >= 0 && pos < sameStreetIndices.length - 1 ? sameStreetIndices[pos + 1] : null;
-            const positionInfo = sameStreetIndices.length > 1 ? `${pos + 1}/${sameStreetIndices.length}` : '1/1';
-
-            return { prevIndex, nextIndex, positionInfo };
-        }
-
-        /**
-         * Navigate to previous/next panorama on same street.
-         */
-        async function navigateStreet(direction) {
-            if (!currentDetectionContext) return;
-            const { index } = currentDetectionContext;
-            const { prevIndex, nextIndex } = getStreetNavInfo(index);
-            const targetIndex = direction < 0 ? prevIndex : nextIndex;
-            if (targetIndex === null) return;
-            await showDetectionForIndex(targetIndex);
         }
 
         /**
@@ -758,23 +698,8 @@
          */
         function closeDetectionModal() {
             document.getElementById('detectionModal').classList.remove('visible');
+            cleanupDetectionPanorama();
             currentDetectionContext = null;
-        }
-
-        /**
-         * Open current view in 360° panorama.
-         */
-        function openCurrentIn360() {
-            if (!currentDetectionContext) return;
-
-            const { panoId, heading } = currentDetectionContext;
-
-            // Close detection modal
-            closeDetectionModal();
-
-            // Open panorama modal
-            document.getElementById('panoramaModal').classList.add('visible');
-            openPanorama(panoId, heading, document.getElementById('panoramaContainer'));
         }
 
         /**

@@ -1,18 +1,26 @@
 /**
  * Parking sign detection module.
- * Handles API calls and bounding box rendering.
+ * Handles API calls and bounding box overlay on interactive panorama.
  */
+
+// Detection state
+let detectionPanorama = null;
+let currentDetections = [];  // Store detections as {heading, pitch, angularWidth, angularHeight, confidence, class_name}
+let detectionPov = { heading: 0, pitch: 0, zoom: 1 };  // POV when detection was run
+let povChangeListener = null;
+let panoChangeListener = null;
 
 /**
  * Build Street View Static API URL.
  * @param {string} panoId - Panorama ID
  * @param {number} heading - View heading in degrees
- * @param {number} width - Image width (max 640)
- * @param {number} height - Image height (max 640)
- * @param {number} zoom - Zoom level (0-3, default 0)
+ * @param {number} pitch - View pitch in degrees
+ * @param {number} fov - Field of view in degrees
+ * @param {number} width - Image width (default 640)
+ * @param {number} height - Image height (default 640)
  * @returns {string} Street View Static API URL
  */
-function getStreetViewImageUrl(panoId, heading, width = 640, height = 640, zoom = 0) {
+function getStreetViewImageUrl(panoId, heading, pitch = -5, fov = 90, width = 640, height = 640) {
     const apiKey = window.GOOGLE_CONFIG?.API_KEY;
     if (!apiKey) {
         throw new Error('Google API key not configured');
@@ -22,8 +30,8 @@ function getStreetViewImageUrl(panoId, heading, width = 640, height = 640, zoom 
         `size=${width}x${height}` +
         `&pano=${panoId}` +
         `&heading=${heading}` +
-        `&pitch=-5` +
-        `&zoom=${zoom}` +
+        `&pitch=${pitch}` +
+        `&fov=${fov}` +
         `&key=${apiKey}`;
 }
 
@@ -38,133 +46,327 @@ async function runDetection(imageUrl, confidence = null) {
     if (!apiUrl) {
         throw new Error('Detection API URL not configured');
     }
-    
+
     const conf = confidence ?? window.DETECTION_CONFIG?.CONFIDENCE_THRESHOLD ?? 0.15;
-    
-    const resp = await fetch(`${apiUrl}/detect`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            image_url: imageUrl,
-            confidence: conf
-        })
-    });
-    
+
+    let resp;
+    try {
+        resp = await fetch(`${apiUrl}/detect`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                image_url: imageUrl,
+                confidence: conf
+            })
+        });
+    } catch (err) {
+        // Fetch throws a TypeError for network-level failures (connection refused, blocked by client,
+        // CORS issues, etc.). Give a more actionable message.
+        console.error('Detection request failed before reaching the server.', { apiUrl, err });
+
+        const msg = `Can't reach the detection API (${apiUrl}). ` +
+            `Make sure the backend is running (try ${apiUrl}/health). ` +
+            `If you see net::ERR_BLOCKED_BY_CLIENT, disable/whitelist ad blockers or privacy extensions for localhost.`;
+
+        throw new Error(msg);
+    }
+
     if (!resp.ok) {
         const errorText = await resp.text();
         throw new Error(`Detection failed: ${resp.status} - ${errorText}`);
     }
-    
+
     return resp.json();
 }
 
 /**
- * Check if detection backend is available.
- * @returns {Promise<boolean>} True if backend is healthy
+ * Convert pixel coordinates to angular coordinates relative to POV.
+ * @param {number} x - Pixel x
+ * @param {number} y - Pixel y
+ * @param {number} hFov - Horizontal field of view in degrees
+ * @param {number} imgWidth - Image width
+ * @param {number} imgHeight - Image height
+ * @returns {{headingOffset: number, pitchOffset: number}}
  */
-async function isDetectionAvailable() {
-    const apiUrl = window.DETECTION_CONFIG?.API_URL;
-    if (!apiUrl) return false;
+function pixelToAngular(x, y, hFov, imgWidth, imgHeight) {
+    // Center of image is (0, 0) in angular terms
+    const centerX = imgWidth / 2;
+    const centerY = imgHeight / 2;
     
-    try {
-        const resp = await fetch(`${apiUrl}/health`, { timeout: 2000 });
-        return resp.ok;
-    } catch {
-        return false;
-    }
+    // For Street View static API, the horizontal FOV is specified,
+    // and vertical FOV is determined by aspect ratio
+    const vFov = hFov * (imgHeight / imgWidth);
+    
+    // Convert pixel offset to angular offset
+    const degreesPerPixelX = hFov / imgWidth;
+    const degreesPerPixelY = vFov / imgHeight;
+    const headingOffset = (x - centerX) * degreesPerPixelX;
+    const pitchOffset = -(y - centerY) * degreesPerPixelY;  // Y is inverted
+    
+    return { headingOffset, pitchOffset };
 }
 
 /**
- * Draw detection boxes on a canvas.
- * @param {CanvasRenderingContext2D} ctx - Canvas context
- * @param {Array} detections - Array of detection objects
- * @param {number} scaleX - X scale factor (canvas width / image width)
- * @param {number} scaleY - Y scale factor (canvas height / image height)
+ * Convert detection box to angular coordinates.
+ * @param {Object} det - Detection {x1, y1, x2, y2, confidence, class_name}
+ * @param {number} povHeading - POV heading when detected
+ * @param {number} povPitch - POV pitch when detected
+ * @param {number} hFov - Horizontal field of view
+ * @param {number} imgWidth - Image width
+ * @param {number} imgHeight - Image height
+ * @returns {Object} Angular detection
  */
-function drawDetections(ctx, detections, scaleX = 1, scaleY = 1) {
-    ctx.lineWidth = 3;
-    ctx.font = 'bold 14px Arial';
+function detectionToAngular(det, povHeading, povPitch, hFov, imgWidth, imgHeight) {
+    const centerX = (det.x1 + det.x2) / 2;
+    const centerY = (det.y1 + det.y2) / 2;
+    const width = det.x2 - det.x1;
+    const height = det.y2 - det.y1;
     
-    for (const det of detections) {
-        const x1 = det.x1 * scaleX;
-        const y1 = det.y1 * scaleY;
-        const x2 = det.x2 * scaleX;
-        const y2 = det.y2 * scaleY;
-        const width = x2 - x1;
-        const height = y2 - y1;
+    const { headingOffset, pitchOffset } = pixelToAngular(centerX, centerY, hFov, imgWidth, imgHeight);
+    const vFov = hFov * (imgHeight / imgWidth);
+    const degreesPerPixelX = hFov / imgWidth;
+    const degreesPerPixelY = vFov / imgHeight;
+    
+    return {
+        heading: povHeading + headingOffset,
+        pitch: povPitch + pitchOffset,
+        angularWidth: width * degreesPerPixelX,
+        angularHeight: height * degreesPerPixelY,
+        confidence: det.confidence,
+        class_name: det.class_name
+    };
+}
+
+/**
+ * Convert angular detection back to screen coordinates.
+ * @param {Object} angularDet - Angular detection
+ * @param {number} currentHeading - Current POV heading
+ * @param {number} currentPitch - Current POV pitch
+ * @param {number} currentFov - Current horizontal FOV
+ * @param {number} screenWidth - Screen width
+ * @param {number} screenHeight - Screen height
+ * @returns {Object|null} Screen coordinates or null if out of view
+ */
+function angularToScreen(angularDet, currentHeading, currentPitch, currentFov, screenWidth, screenHeight) {
+    // Calculate heading difference (handle wrap-around)
+    let headingDiff = angularDet.heading - currentHeading;
+    if (headingDiff > 180) headingDiff -= 360;
+    if (headingDiff < -180) headingDiff += 360;
+    
+    const pitchDiff = angularDet.pitch - currentPitch;
+    
+    // Calculate vertical FOV based on aspect ratio
+    // Panorama viewer maintains aspect ratio, so vertical FOV = horizontal FOV * (height/width)
+    const aspectRatio = screenHeight / screenWidth;
+    const verticalFov = currentFov * aspectRatio;
+    
+    // Check if in view (with some margin)
+    const halfHFov = currentFov / 2;
+    const halfVFov = verticalFov / 2;
+    if (Math.abs(headingDiff) > halfHFov + angularDet.angularWidth / 2) return null;
+    if (Math.abs(pitchDiff) > halfVFov + angularDet.angularHeight / 2) return null;
+    
+    // Convert to screen coordinates - use separate pixels/degree for X and Y
+    const pixelsPerDegreeX = screenWidth / currentFov;
+    const pixelsPerDegreeY = screenHeight / verticalFov;
+    const centerX = screenWidth / 2 + headingDiff * pixelsPerDegreeX;
+    const centerY = screenHeight / 2 - pitchDiff * pixelsPerDegreeY;  // Y inverted
+    const width = angularDet.angularWidth * pixelsPerDegreeX;
+    const height = angularDet.angularHeight * pixelsPerDegreeY;
+    
+    return {
+        x: centerX - width / 2,
+        y: centerY - height / 2,
+        width,
+        height,
+        confidence: angularDet.confidence,
+        class_name: angularDet.class_name
+    };
+}
+
+/**
+ * Update SVG overlay with detection boxes.
+ */
+function updateDetectionOverlay() {
+    const overlay = document.getElementById('detectionOverlay');
+    if (!overlay || !detectionPanorama) return;
+    
+    const pov = detectionPanorama.getPov();
+    const container = document.getElementById('detectionPanorama');
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    
+    // Calculate current FOV from zoom (approximate)
+    // Google Street View: zoom 0 = ~180° FOV, zoom 1 = ~90°, zoom 2 = ~45°, etc.
+    const fov = 180 / Math.pow(2, pov.zoom || 1);
+    
+    // Clear existing boxes
+    overlay.innerHTML = '';
+    
+    // Draw each detection if visible
+    for (const det of currentDetections) {
+        const screen = angularToScreen(det, pov.heading, pov.pitch, fov, width, height);
+        if (!screen) continue;
         
         // Color based on confidence
-        const hue = det.confidence * 120; // 0 = red, 120 = green
+        const hue = det.confidence * 120;
         const color = `hsl(${hue}, 100%, 50%)`;
         
-        // Draw box
-        ctx.strokeStyle = color;
-        ctx.strokeRect(x1, y1, width, height);
+        // Create rect
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('x', screen.x);
+        rect.setAttribute('y', screen.y);
+        rect.setAttribute('width', screen.width);
+        rect.setAttribute('height', screen.height);
+        rect.setAttribute('fill', 'none');
+        rect.setAttribute('stroke', color);
+        rect.setAttribute('stroke-width', '3');
+        overlay.appendChild(rect);
         
-        // Draw label background
-        const label = `${det.class_name} ${(det.confidence * 100).toFixed(0)}%`;
-        const labelWidth = ctx.measureText(label).width + 8;
-        const labelHeight = 20;
+        // Create label background
+        const label = `${det.class_name} ${Math.round(det.confidence * 100)}%`;
+        const labelBg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        labelBg.setAttribute('x', screen.x);
+        labelBg.setAttribute('y', screen.y - 20);
+        labelBg.setAttribute('width', label.length * 8 + 8);
+        labelBg.setAttribute('height', '18');
+        labelBg.setAttribute('fill', color);
+        overlay.appendChild(labelBg);
         
-        ctx.fillStyle = color;
-        ctx.fillRect(x1, y1 - labelHeight, labelWidth, labelHeight);
-        
-        // Draw label text
-        ctx.fillStyle = 'white';
-        ctx.fillText(label, x1 + 4, y1 - 5);
+        // Create label text
+        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        text.setAttribute('x', screen.x + 4);
+        text.setAttribute('y', screen.y - 6);
+        text.setAttribute('fill', 'white');
+        text.setAttribute('font-size', '12');
+        text.setAttribute('font-weight', 'bold');
+        text.textContent = label;
+        overlay.appendChild(text);
     }
 }
 
 /**
- * Load an image and return its dimensions.
- * @param {string} url - Image URL
- * @returns {Promise<{img: HTMLImageElement, width: number, height: number}>}
+ * Initialize or update the detection panorama.
+ * @param {string} panoId - Panorama ID
+ * @param {number} heading - Initial heading
+ * @param {HTMLElement} container - Container element
  */
-function loadImage(url) {
-    return new Promise((resolve, reject) => {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.onload = () => resolve({ img, width: img.width, height: img.height });
-        img.onerror = () => reject(new Error('Failed to load image'));
-        img.src = url;
-    });
+function initDetectionPanorama(panoId, heading, container) {
+    if (detectionPanorama) {
+        // Update existing panorama
+        detectionPanorama.setPano(panoId);
+        detectionPanorama.setPov({ heading, pitch: -5, zoom: 1 });
+    } else {
+        // Create new panorama
+        detectionPanorama = new google.maps.StreetViewPanorama(container, {
+            pano: panoId,
+            pov: { heading, pitch: -5 },
+            zoom: 1,
+            addressControl: false,
+            showRoadLabels: false,
+            motionTracking: false,
+            motionTrackingControl: false,
+            linksControl: false,
+            panControl: true,
+            zoomControl: true,
+            fullscreenControl: false
+        });
+        
+        // Listen for POV changes to update overlay (zoom/pan preserves boxes)
+        povChangeListener = detectionPanorama.addListener('pov_changed', updateDetectionOverlay);
+        
+        // Listen for pano changes (user clicks to navigate) to clear detections
+        panoChangeListener = detectionPanorama.addListener('pano_changed', clearDetections);
+    }
+    
+    // Clear detections
+    currentDetections = [];
+    updateDetectionOverlay();
 }
 
 /**
- * Run full detection pipeline and render to canvas.
+ * Clear current detections (called when panorama changes).
+ */
+function clearDetections() {
+    currentDetections = [];
+    updateDetectionOverlay();
+    
+    // Update status to prompt user to re-detect
+    const statusEl = document.getElementById('detectionStatus');
+    if (statusEl) {
+        statusEl.textContent = 'Panorama changed. Click "Detect" to scan for parking signs';
+    }
+}
+
+/**
+ * Run detection and display results on panorama.
  * @param {string} panoId - Panorama ID
- * @param {number} heading - View heading
- * @param {HTMLCanvasElement} canvas - Canvas element to render to
- * @param {HTMLElement} statusEl - Element to show status text
+ * @param {number} heading - View heading (optional, uses current POV if not provided)
+ * @param {HTMLElement} statusEl - Status element
+ * @param {boolean} useCurrentPov - If true, use current panorama POV instead of passed heading
  * @returns {Promise<Object>} Detection results
  */
-async function detectAndRender(panoId, heading, canvas, statusEl) {
-    const ctx = canvas.getContext('2d');
+async function runDetectionOnPanorama(panoId, heading, statusEl, useCurrentPov = false) {
+    let fov = 90;  // Default FOV for detection
+    let pitch = -5;
+    let detectHeading = heading;
+    let detectPanoId = panoId;
     
-    // Build image URL with zoom level 1 for closer view
-    const imageUrl = getStreetViewImageUrl(panoId, heading, 640, 640, 1);
+    // Get screen dimensions for aspect ratio matching
+    const container = document.getElementById('detectionPanorama');
+    const screenWidth = container?.clientWidth || 1920;
+    const screenHeight = container?.clientHeight || 1080;
+    const aspectRatio = screenWidth / screenHeight;
     
-    // Update status
-    if (statusEl) statusEl.textContent = 'Loading image...';
+    // Calculate image dimensions - max 640 on longest side, maintain aspect ratio
+    let imgWidth, imgHeight;
+    if (aspectRatio >= 1) {
+        imgWidth = 640;
+        imgHeight = Math.round(640 / aspectRatio);
+    } else {
+        imgHeight = 640;
+        imgWidth = Math.round(640 * aspectRatio);
+    }
     
-    // Load image
-    const { img, width, height } = await loadImage(imageUrl);
+    // If using current POV, get it from the panorama.
+    // IMPORTANT: the user can also navigate within Street View (pano changes). In that case we must
+    // use the CURRENT panoId, not the one from when the modal first opened.
+    if (useCurrentPov && detectionPanorama) {
+        const pov = detectionPanorama.getPov();
+        detectHeading = pov.heading;
+        pitch = pov.pitch;
+        // Calculate FOV from zoom: zoom 0 = ~180°, zoom 1 = ~90°, zoom 2 = ~45°
+        fov = 180 / Math.pow(2, pov.zoom || 1);
+        // Clamp FOV to reasonable range for static API (max 120°)
+        fov = Math.min(120, Math.max(20, fov));
+
+        if (typeof detectionPanorama.getPano === 'function') {
+            const currentPano = detectionPanorama.getPano();
+            if (currentPano) detectPanoId = currentPano;
+        }
+    }
     
-    // Set canvas size
-    canvas.width = width;
-    canvas.height = height;
+    // Build image URL with matching aspect ratio
+    const imageUrl = getStreetViewImageUrl(detectPanoId, detectHeading, pitch, fov, imgWidth, imgHeight);
     
-    // Draw image
-    ctx.drawImage(img, 0, 0);
+    // Debug: log detection parameters
+    console.log('Detection params:', { panoId: detectPanoId, heading: detectHeading, pitch, fov, imgWidth, imgHeight, imageUrl });
     
-    // Run detection
     if (statusEl) statusEl.textContent = 'Detecting parking signs...';
     
     try {
         const result = await runDetection(imageUrl);
         
-        // Draw boxes
-        drawDetections(ctx, result.detections);
+        // Convert detections to angular coordinates
+        currentDetections = result.detections.map(det => 
+            detectionToAngular(det, detectHeading, pitch, fov, imgWidth, imgHeight)
+        );
+        
+        // Store detection POV
+        detectionPov = { heading: detectHeading, pitch, fov };
+        
+        // Update overlay
+        updateDetectionOverlay();
         
         // Update status
         const count = result.detections.length;
@@ -180,5 +382,15 @@ async function detectAndRender(panoId, heading, canvas, statusEl) {
         console.error('Detection error:', err);
         if (statusEl) statusEl.textContent = `Detection failed: ${err.message}`;
         throw err;
+    }
+}
+
+/**
+ * Clean up detection panorama when closing modal.
+ */
+function cleanupDetectionPanorama() {
+    currentDetections = [];
+    if (document.getElementById('detectionOverlay')) {
+        document.getElementById('detectionOverlay').innerHTML = '';
     }
 }

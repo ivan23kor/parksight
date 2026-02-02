@@ -4,8 +4,8 @@
   "description": "Interactive map visualization tool with overlay and street selection features",
   "main": "src/index.html",
   "scripts": {
-    "serve": "python3 -m http.server 8080",
-    "serve:dist": "cd dist && python3 -m http.server 8081",
+    "serve": "python3 -m http.server 8080 --bind 127.0.0.1",
+    "serve:dist": "cd dist && python3 -m http.server 8081 --bind 127.0.0.1",
     "build": "cp src/index.html dist/index.html"
   },
   "keywords": [
