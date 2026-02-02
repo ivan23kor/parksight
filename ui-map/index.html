@@ -61,6 +61,23 @@
             align-items: center;
         }
 
+        #uiSwitcher {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+        }
+
+        #uiSwitcher select {
+            padding: 8px 12px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            font-size: 14px;
+            cursor: pointer;
+            background: white;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
         .controls button {
             margin-right: 0;
         }
@@ -235,6 +252,14 @@
     </style>
 </head>
 <body>
+    <div id="uiSwitcher">
+        <select id="uiSelect" onchange="if(this.value) window.location.href=this.value">
+            <option value="../ui-panorama/">🔭 Panorama</option>
+            <option value="../ui-map/" selected>📍 Map</option>
+            <option value="../ui-upload/out/">📤 Upload</option>
+        </select>
+    </div>
+
     <div class="controls">
         <button id="selectStreets">Select Area (Ctrl+Drag)</button>
         <select id="sideToggle">
@@ -596,7 +621,11 @@
 
             } catch (err) {
                 console.error('Selection error:', err);
-                showError(`Error: ${err.message}`);
+                let msg = err.message;
+                if (msg.includes('504')) {
+                    msg = 'Selection too narrow. Try selecting a larger area.';
+                }
+                showError(msg);
                 hideProgress();
             }
         }

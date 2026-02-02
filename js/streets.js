@@ -18,32 +18,48 @@ async function fetchStreets(bounds) {
         out geom;
     `;
 
-    const response = await fetch('https://overpass-api.de/api/interpreter', {
-        method: 'POST',
-        body: overpassQuery
-    });
+    let lastError;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            const response = await fetch('https://overpass-api.de/api/interpreter', {
+                method: 'POST',
+                body: overpassQuery
+            });
 
-    if (!response.ok) {
-        throw new Error(`Overpass API error: ${response.status}`);
-    }
-
-    const data = await response.json();
-
-    // Extract ways with geometry
-    const ways = [];
-    if (data.elements) {
-        for (const element of data.elements) {
-            if (element.type === 'way' && element.geometry && element.geometry.length >= 2) {
-                ways.push({
-                    id: element.id,
-                    geometry: element.geometry,
-                    tags: element.tags || {}
-                });
+            if (!response.ok) {
+                if (response.status === 504 && attempt < 2) {
+                    const delay = Math.pow(2, attempt) * 1000;
+                    await new Promise(r => setTimeout(r, delay));
+                    continue;
+                }
+                throw new Error(`Overpass API error: ${response.status}`);
             }
+
+            const data = await response.json();
+
+            // Extract ways with geometry
+            const ways = [];
+            if (data.elements) {
+                for (const element of data.elements) {
+                    if (element.type === 'way' && element.geometry && element.geometry.length >= 2) {
+                        ways.push({
+                            id: element.id,
+                            geometry: element.geometry,
+                            tags: element.tags || {}
+                        });
+                    }
+                }
+            }
+
+            return ways;
+
+        } catch (err) {
+            lastError = err;
+            if (attempt < 2) continue;
         }
     }
 
-    return ways;
+    throw lastError;
 }
 
 /**
