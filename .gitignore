@@ -25,3 +25,6 @@ venv/
 
 # Large datasets (upload to Kaggle separately)
 datasets/
+
+# Detection images for debugging
+detection_images/

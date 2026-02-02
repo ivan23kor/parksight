@@ -4,6 +4,7 @@ FastAPI backend for YOLO11 inference on Street View images.
 """
 import io
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -16,6 +17,8 @@ from ultralytics import YOLO
 
 # Paths
 MODEL_PATH = Path(__file__).parent.parent / "notebooks/output/test_run/train/weights/best.pt"
+DETECTION_IMAGES_DIR = Path(__file__).parent.parent / "detection_images"
+DETECTION_IMAGES_DIR.mkdir(exist_ok=True)
 
 # Load model at startup
 print(f"Loading model from: {MODEL_PATH}")
@@ -83,6 +86,11 @@ async def detect(request: DetectionRequest):
             image_bytes = resp.content
     except httpx.HTTPError as e:
         raise HTTPException(status_code=400, detail=f"Failed to fetch image: {e}")
+
+    # Save image for debugging/dataset analysis
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    image_path = DETECTION_IMAGES_DIR / f"detection_{timestamp}.jpg"
+    image_path.write_bytes(image_bytes)
     
     # Load image
     try:
