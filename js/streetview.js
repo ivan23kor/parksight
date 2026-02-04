@@ -138,6 +138,31 @@ async function fetchPanoIds(locations, session) {
 }
 
 /**
+ * Fetch Street View metadata for a panorama.
+ * Returns imageWidth, imageHeight, and other metadata.
+ * @param {string} panoId - Panorama ID
+ * @param {string} session - Session token
+ * @returns {Promise<Object>} Metadata including imageWidth, imageHeight
+ */
+async function fetchStreetViewMetadata(panoId, session) {
+    const apiKey = window.GOOGLE_CONFIG?.API_KEY;
+    if (!apiKey) {
+        throw new Error('Google API key not configured');
+    }
+
+    const resp = await fetch(
+        `https://tile.googleapis.com/v1/streetview/metadata?session=${session}&key=${apiKey}&panoId=${panoId}`
+    );
+
+    if (!resp.ok) {
+        const errorText = await resp.text();
+        throw new Error(`Metadata request failed: ${resp.status} - ${errorText}`);
+    }
+
+    return resp.json();
+}
+
+/**
  * Open or update Street View panorama.
  * Reuses single instance for efficiency.
  * @param {string} panoId - Panorama ID

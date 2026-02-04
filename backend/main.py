@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel
 from ultralytics import YOLO
 
@@ -44,15 +44,20 @@ class DetectionRequest(BaseModel):
     confidence: float = 0.15
 
 
-class SaveSignRequest(BaseModel):
+class CropSignTilesRequest(BaseModel):
     pano_id: str
-    heading: float
-    pitch: float
-    fov: float
-    angular_width: float  # Sign's angular width in degrees
-    angular_height: float  # Sign's angular height in degrees
+    # Tiles to fetch (list of {x, y} at zoom level 5)
+    tiles: list[dict]
+    tile_x1: int  # Origin tile x
+    tile_y1: int  # Origin tile y
+    # Crop bounds within stitched tile image
+    crop_x: int
+    crop_y: int
+    crop_width: int
+    crop_height: int
     confidence: float = 0.0
     api_key: str
+    session_token: str
 
 
 class Detection(BaseModel):
@@ -208,57 +213,61 @@ async def health():
     return {"status": "ok", "model": str(MODEL_PATH.name)}
 
 
-@app.post("/save-sign")
-async def save_sign(request: SaveSignRequest):
+TILE_SIZE = 512  # Street View tile size
+
+@app.post("/crop-sign-tiles")
+async def crop_sign_tiles(request: CropSignTilesRequest):
     """
-    Save a zoomed Street View image of a parking sign.
-    Called when user clicks on a detection to save it.
+    Fetch Street View tiles at max zoom, stitch if needed, crop sign region.
+    This gives much higher resolution than the Static API.
     """
-    # Build Street View URL for the sign (centered on sign)
-    url = build_streetview_url(
-        request.pano_id, request.heading, request.pitch, request.fov,
-        640, 640, request.api_key
-    )
+    async with httpx.AsyncClient() as client:
+        # Fetch all required tiles
+        tile_images = {}
+        for tile in request.tiles:
+            url = (
+                f"https://tile.googleapis.com/v1/streetview/tiles/5/{tile['x']}/{tile['y']}"
+                f"?session={request.session_token}&key={request.api_key}&panoId={request.pano_id}"
+            )
+            try:
+                resp = await client.get(url, timeout=10.0)
+                resp.raise_for_status()
+                tile_images[(tile['x'], tile['y'])] = Image.open(io.BytesIO(resp.content))
+            except httpx.HTTPError as e:
+                raise HTTPException(status_code=400, detail=f"Failed to fetch tile {tile}: {e}")
     
-    # Fetch the image
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(url, timeout=10.0)
-            resp.raise_for_status()
-            image_bytes = resp.content
-    except httpx.HTTPError as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch image: {e}")
+    # Calculate stitched image size
+    num_tiles_x = max(t['x'] for t in request.tiles) - request.tile_x1 + 1
+    num_tiles_y = max(t['y'] for t in request.tiles) - request.tile_y1 + 1
+    stitch_width = num_tiles_x * TILE_SIZE
+    stitch_height = num_tiles_y * TILE_SIZE
     
-    # Load and crop to just the sign
-    image = Image.open(io.BytesIO(image_bytes))
-    img_w, img_h = image.size
+    # Create stitched image
+    stitched = Image.new('RGB', (stitch_width, stitch_height))
+    for (tx, ty), tile_img in tile_images.items():
+        paste_x = (tx - request.tile_x1) * TILE_SIZE
+        paste_y = (ty - request.tile_y1) * TILE_SIZE
+        stitched.paste(tile_img, (paste_x, paste_y))
     
-    # Calculate sign size in pixels (sign is centered in image)
-    # pixels_per_degree = image_width / fov
-    px_per_deg = img_w / request.fov
-    sign_w_px = request.angular_width * px_per_deg
-    sign_h_px = request.angular_height * px_per_deg
+    # Crop the sign region
+    x1 = max(0, request.crop_x)
+    y1 = max(0, request.crop_y)
+    x2 = min(stitch_width, request.crop_x + request.crop_width)
+    y2 = min(stitch_height, request.crop_y + request.crop_height)
     
-    # Add small padding (20%)
-    padding = 1.2
-    crop_w = sign_w_px * padding
-    crop_h = sign_h_px * padding
+    cropped = stitched.crop((x1, y1, x2, y2))
     
-    # Crop from center
-    cx, cy = img_w / 2, img_h / 2
-    x1 = max(0, int(cx - crop_w / 2))
-    y1 = max(0, int(cy - crop_h / 2))
-    x2 = min(img_w, int(cx + crop_w / 2))
-    y2 = min(img_h, int(cy + crop_h / 2))
-    
-    cropped = image.crop((x1, y1, x2, y2))
-    
-    # Save the cropped image
+    # Save
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{timestamp}_conf{request.confidence:.2f}.jpg"
     cropped.save(DETECTED_SIGNS_DIR / filename, quality=95)
     
-    return {"filename": filename, "size": (x2-x1) * (y2-y1)}
+    return {
+        "filename": filename, 
+        "width": x2 - x1, 
+        "height": y2 - y1,
+        "tiles_fetched": len(request.tiles)
+    }
 
 
 @app.post("/detect", response_model=DetectionResponse)
@@ -322,6 +331,58 @@ async def detect(request: DetectionRequest):
     )
 
 
+from fastapi.responses import Response
+
+@app.get("/detect-debug")
+async def detect_debug(image_url: str, confidence: float = 0.15):
+    """
+    Run detection and return the image with bounding boxes drawn.
+    Use this to verify YOLO is detecting correctly.
+    """
+    if not image_url:
+        raise HTTPException(status_code=400, detail="image_url is required")
+    
+    # Fetch image
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(image_url, timeout=10.0)
+        resp.raise_for_status()
+        image_bytes = resp.content
+    
+    # Load image
+    image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
+    draw = ImageDraw.Draw(image)
+    
+    # Run inference
+    results = model.predict(image, conf=confidence, verbose=False)
+    
+    # Draw boxes
+    for r in results:
+        if r.boxes is not None:
+            for box in r.boxes:
+                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                conf = float(box.conf[0])
+                cls_name = model.names[int(box.cls[0])]
+                
+                # Draw red box
+                draw.rectangle([x1, y1, x2, y2], outline='red', width=3)
+                # Draw label
+                label = f"{cls_name} {conf:.0%}"
+                draw.rectangle([x1, y1-20, x1+len(label)*8, y1], fill='red')
+                draw.text((x1+2, y1-18), label, fill='white')
+    
+    # Draw center crosshair
+    cx, cy = image.width // 2, image.height // 2
+    draw.line([(cx-20, cy), (cx+20, cy)], fill='lime', width=2)
+    draw.line([(cx, cy-20), (cx, cy+20)], fill='lime', width=2)
+    
+    # Save to bytes
+    buf = io.BytesIO()
+    image.save(buf, format='JPEG', quality=90)
+    buf.seek(0)
+    
+    return Response(content=buf.getvalue(), media_type="image/jpeg")
+
+
 @app.post("/detect-file", response_model=DetectionResponse)
 async def detect_file(file: UploadFile = File(...), confidence: float = 0.15):
     """
@@ -336,11 +397,6 @@ async def detect_file(file: UploadFile = File(...), confidence: float = 0.15):
     """
     # Read file
     image_bytes = await file.read()
-
-    # Save image for debugging/dataset analysis
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    image_path = DETECTION_IMAGES_DIR / f"detection_{timestamp}.jpg"
-    image_path.write_bytes(image_bytes)
 
     # Load image
     try:

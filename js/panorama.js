@@ -6,7 +6,7 @@
 // Default panorama settings
 const PANORAMA_DEFAULTS = {
     pitch: 0,        // Look straight ahead (0 = horizon)
-    zoom: 1,
+    zoom: 2.5,       // 2.5x zoom for better sign visibility
     sideOffset: 45   // Degrees to offset when looking at street side
 };
 
