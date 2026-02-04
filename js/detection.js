@@ -9,6 +9,7 @@ let currentDetections = [];  // Store detections as {heading, pitch, angularWidt
 let detectionPov = { heading: 0, pitch: 0, zoom: 1 };  // POV when detection was run
 let povChangeListener = null;
 let panoChangeListener = null;
+let zoomedDetection = null;  // Currently zoomed detection (for save-on-second-click)
 
 /**
  * Build Street View Static API URL.
@@ -212,15 +213,39 @@ function updateDetectionOverlay() {
         const hue = det.confidence * 120;
         const color = `hsl(${hue}, 100%, 50%)`;
         
-        // Create rect
+        // Create clickable rect
         const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
         rect.setAttribute('x', screen.x);
         rect.setAttribute('y', screen.y);
         rect.setAttribute('width', screen.width);
         rect.setAttribute('height', screen.height);
-        rect.setAttribute('fill', 'none');
+        rect.setAttribute('fill', 'rgba(255, 255, 255, 0.1)');  // Slight fill for clickable area
         rect.setAttribute('stroke', color);
         rect.setAttribute('stroke-width', '3');
+        rect.style.cursor = 'pointer';
+        rect.style.transition = 'all 0.15s ease';
+        rect.style.pointerEvents = 'auto';  // Override parent's pointer-events: none
+        
+        // Hover effects
+        rect.addEventListener('mouseenter', () => {
+            rect.setAttribute('stroke-width', '5');
+            rect.setAttribute('fill', 'rgba(255, 255, 255, 0.3)');
+            rect.style.filter = 'drop-shadow(0 0 8px rgba(255, 255, 255, 0.8))';
+        });
+        rect.addEventListener('mouseleave', () => {
+            rect.setAttribute('stroke-width', '3');
+            rect.setAttribute('fill', 'rgba(255, 255, 255, 0.1)');
+            rect.style.filter = 'none';
+        });
+        
+        // Click to zoom/save sign - stop propagation to prevent panorama interaction
+        rect.addEventListener('click', (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            handleDetectionClick(det);
+        });
+        rect.addEventListener('mousedown', (e) => e.stopPropagation());
+        rect.addEventListener('mouseup', (e) => e.stopPropagation());
         overlay.appendChild(rect);
         
         // Create label background
@@ -291,6 +316,7 @@ function initDetectionPanorama(panoId, heading, container) {
  */
 function clearDetections() {
     currentDetections = [];
+    zoomedDetection = null;
     updateDetectionOverlay();
     
     // Update status to prompt user to re-detect
@@ -384,6 +410,112 @@ async function runDetectionOnPanorama(panoId, heading, statusEl, useCurrentPov =
         console.error('Detection error:', err);
         if (statusEl) statusEl.textContent = `Detection failed: ${err.message}`;
         throw err;
+    }
+}
+
+/**
+ * Handle click on a detected sign - zoom first, save on second click.
+ * @param {Object} det - Angular detection {heading, pitch, angularWidth, angularHeight}
+ */
+function handleDetectionClick(det) {
+    if (!detectionPanorama) return;
+    
+    // Check if we're already zoomed to this detection
+    if (zoomedDetection === det) {
+        // Second click - save the image
+        saveZoomedSign(det);
+        return;
+    }
+    
+    // First click - zoom to the detection
+    zoomToDetection(det);
+    zoomedDetection = det;
+    
+    // Update status
+    const statusEl = document.getElementById('status') || document.getElementById('detectionStatus');
+    if (statusEl) {
+        statusEl.textContent = 'Click again to save this sign';
+    }
+}
+
+/**
+ * Zoom panorama to center on a detected sign.
+ * @param {Object} det - Angular detection {heading, pitch, angularWidth, angularHeight}
+ */
+function zoomToDetection(det) {
+    if (!detectionPanorama) return;
+    
+    // Calculate zoom level to fit the sign
+    // Google Street View: FOV = 180 / 2^zoom, so zoom = log2(180 / FOV)
+    // We want the sign to fill ~60% of the view, so target FOV = sign angular size / 0.6
+    const signAngularSize = Math.max(det.angularWidth, det.angularHeight);
+    const targetFov = signAngularSize / 0.6;
+    // Clamp FOV to valid range [10, 180]
+    const clampedFov = Math.max(10, Math.min(180, targetFov));
+    const zoom = Math.log2(180 / clampedFov);
+    // Clamp zoom to valid range [0, 5]
+    const clampedZoom = Math.max(0, Math.min(5, zoom));
+    
+    detectionPanorama.setPov({
+        heading: det.heading,
+        pitch: det.pitch,
+        zoom: clampedZoom
+    });
+}
+
+/**
+ * Save the currently zoomed sign image via backend.
+ * @param {Object} det - Angular detection
+ */
+async function saveZoomedSign(det) {
+    const statusEl = document.getElementById('status') || document.getElementById('detectionStatus');
+    const apiUrl = window.DETECTION_CONFIG?.API_URL;
+    
+    if (!apiUrl || !detectionPanorama) {
+        if (statusEl) statusEl.textContent = 'Cannot save: API not configured';
+        return;
+    }
+    
+    const panoId = detectionPanorama.getPano();
+    if (!panoId) {
+        if (statusEl) statusEl.textContent = 'Cannot save: no panorama loaded';
+        return;
+    }
+    
+    // Use minimum FOV (10°) for max resolution, backend will crop to sign
+    const fov = 10;
+    
+    if (statusEl) statusEl.textContent = 'Saving sign image...';
+    
+    try {
+        const resp = await fetch(`${apiUrl}/save-sign`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                pano_id: panoId,
+                heading: det.heading,
+                pitch: det.pitch,
+                fov: fov,
+                angular_width: det.angularWidth,
+                angular_height: det.angularHeight,
+                confidence: det.confidence,
+                api_key: window.GOOGLE_CONFIG?.API_KEY
+            })
+        });
+        
+        if (!resp.ok) {
+            throw new Error(`Save failed: ${resp.status}`);
+        }
+        
+        const result = await resp.json();
+        if (statusEl) statusEl.textContent = `Saved: ${result.filename}`;
+        
+        // Clear zoomed state
+        zoomedDetection = null;
+        
+    } catch (err) {
+        console.error('Save error:', err);
+        if (statusEl) statusEl.textContent = `Save failed: ${err.message}`;
     }
 }
 
