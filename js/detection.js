@@ -52,19 +52,32 @@ function angularToPixelSize(angularWidth, angularHeight, imageWidth, imageHeight
 }
 
 /**
+ * Convert equirectangular pixel coordinates back to heading/pitch.
+ * Inverse of headingPitchToPixel.
+ */
+function pixelToHeadingPitch(x, y, imageWidth, imageHeight, panoHeading = 0) {
+    // Inverse of equirectangular projection
+    const h = (x / imageWidth) * 360;
+    const pitch = 90 - (y / imageHeight) * 180;
+    
+    // Convert back to compass heading (reverse the +180 offset)
+    const heading = (h - 180 + panoHeading + 360) % 360;
+    
+    return { heading, pitch };
+}
+
+/**
  * Get tile coordinates that cover a pixel region.
  */
 function getTilesForRegion(x, y, width, height, padding = 1.2) {
     const pw = width * padding;
     const ph = height * padding;
     
-    // Calculate bounds - center the crop on (x, y)
-    // Shift DOWN by ph/2 to fix vertical alignment
-    const yOffset = ph / 2;
+    // Calculate bounds - (x, y) is the center of the detection
     const x1 = x - pw / 2;
-    const y1 = y - ph / 2 + yOffset;
+    const y1 = y - ph / 2;
     const x2 = x + pw / 2;
-    const y2 = y + ph / 2 + yOffset;
+    const y2 = y + ph / 2;
     
     // Calculate tile coordinates
     const tileX1 = Math.floor(x1 / TILE_SIZE);
@@ -147,90 +160,423 @@ async function runDetection(imageUrl, confidence = null) {
 }
 
 /**
- * Convert pixel coordinates to angular coordinates relative to POV.
+ * Convert pixel coordinates in an image to angular coordinates.
+ * Uses proper 3D vector-based gnomonic projection.
+ * This is essentially the same as screenToAngular but for detection images.
  */
-function pixelToAngular(x, y, hFov, imgWidth, imgHeight) {
-    const centerX = imgWidth / 2;
-    const centerY = imgHeight / 2;
-    const vFov = hFov * (imgHeight / imgWidth);
-    
-    const degreesPerPixelX = hFov / imgWidth;
-    const degreesPerPixelY = vFov / imgHeight;
-    
-    const headingOffset = (x - centerX) * degreesPerPixelX;
-    const pitchOffset = -(y - centerY) * degreesPerPixelY;
-    
-    return { headingOffset, pitchOffset };
+function pixelToAngular(x, y, povHeading, povPitch, hFov, imgWidth, imgHeight) {
+    // Delegate to screenToAngular since it's the same math
+    return screenToAngular(x, y, povHeading, povPitch, hFov, imgWidth, imgHeight);
 }
 
 /**
  * Convert detection box to angular coordinates.
+ * Uses proper 3D vector-based gnomonic projection for accurate coordinate conversion.
  */
 function detectionToAngular(det, povHeading, povPitch, hFov, imgWidth, imgHeight) {
     const centerX = (det.x1 + det.x2) / 2;
     const centerY = (det.y1 + det.y2) / 2;
-    const width = det.x2 - det.x1;
-    const height = det.y2 - det.y1;
     
-    const { headingOffset, pitchOffset } = pixelToAngular(centerX, centerY, hFov, imgWidth, imgHeight);
+    // Get angular position of detection center using proper 3D projection
+    const centerAngular = screenToAngular(centerX, centerY, povHeading, povPitch, hFov, imgWidth, imgHeight);
     
-    const vFov = hFov * (imgHeight / imgWidth);
-    const degreesPerPixelX = hFov / imgWidth;
-    const degreesPerPixelY = vFov / imgHeight;
+    // Get angular positions of the four corners for accurate angular dimensions
+    const topLeft = screenToAngular(det.x1, det.y1, povHeading, povPitch, hFov, imgWidth, imgHeight);
+    const topRight = screenToAngular(det.x2, det.y1, povHeading, povPitch, hFov, imgWidth, imgHeight);
+    const bottomLeft = screenToAngular(det.x1, det.y2, povHeading, povPitch, hFov, imgWidth, imgHeight);
+    const bottomRight = screenToAngular(det.x2, det.y2, povHeading, povPitch, hFov, imgWidth, imgHeight);
+    
+    // Compute angular width from left and right edges
+    // Use the average of top and bottom edge widths for robustness
+    let topWidth = topRight.heading - topLeft.heading;
+    let bottomWidth = bottomRight.heading - bottomLeft.heading;
+    
+    // Handle heading wrap-around
+    if (topWidth > 180) topWidth -= 360;
+    if (topWidth < -180) topWidth += 360;
+    if (bottomWidth > 180) bottomWidth -= 360;
+    if (bottomWidth < -180) bottomWidth += 360;
+    
+    const angularWidth = Math.abs((topWidth + bottomWidth) / 2);
+    
+    // Compute angular height from top and bottom edges
+    // Use the average of left and right edge heights for robustness
+    const leftHeight = topLeft.pitch - bottomLeft.pitch;
+    const rightHeight = topRight.pitch - bottomRight.pitch;
+    const angularHeight = Math.abs((leftHeight + rightHeight) / 2);
     
     return {
-        heading: povHeading + headingOffset,
-        pitch: povPitch + pitchOffset,
-        angularWidth: width * degreesPerPixelX,
-        angularHeight: height * degreesPerPixelY,
+        heading: centerAngular.heading,
+        pitch: centerAngular.pitch,
+        angularWidth: angularWidth,
+        angularHeight: angularHeight,
         confidence: det.confidence,
         class_name: det.class_name
     };
 }
 
 /**
- * Convert angular detection back to screen coordinates using gnomonic projection.
+ * Convert heading/pitch to 3D unit direction vector.
+ * Uses PanoMarker's coordinate system: +X = East, +Y = North, +Z = Up
+ * This matches Google Street View's internal representation.
  */
-function angularToScreen(angularDet, currentHeading, currentPitch, currentFov, screenWidth, screenHeight) {
+function headingPitchToDirection(heading, pitch) {
+    const toRad = deg => deg * Math.PI / 180;
+    const headingRad = toRad(heading);
+    const pitchRad = toRad(pitch);
+    
+    // Spherical to Cartesian conversion (PanoMarker convention)
+    // At heading=0, pitch=0: direction is (0, 1, 0) = North
+    // At heading=90, pitch=0: direction is (1, 0, 0) = East
+    // At heading=0, pitch=90: direction is (0, 0, 1) = Up
+    const cosPitch = Math.cos(pitchRad);
+    return {
+        x: cosPitch * Math.sin(headingRad),
+        y: cosPitch * Math.cos(headingRad),
+        z: Math.sin(pitchRad)
+    };
+}
+
+/**
+ * Project a world direction to screen coordinates.
+ * Based on PanoMarker's povToPixel3d which is known to work with Google Street View.
+ * Returns null if the point is behind the camera.
+ */
+function directionToScreen(worldDir, povHeading, povPitch, fov, screenWidth, screenHeight) {
     const toRad = deg => deg * Math.PI / 180;
     
-    let headingDiff = angularDet.heading - currentHeading;
-    if (headingDiff > 180) headingDiff -= 360;
-    if (headingDiff < -180) headingDiff += 360;
+    const h0 = toRad(povHeading);
+    const p0 = toRad(povPitch);
+    const cos_p0 = Math.cos(p0);
+    const sin_p0 = Math.sin(p0);
+    const cos_h0 = Math.cos(h0);
+    const sin_h0 = Math.sin(h0);
     
-    const pitchDiff = angularDet.pitch - currentPitch;
+    // Focal length (distance from camera to image plane)
+    const f = (screenWidth / 2) / Math.tan(toRad(fov / 2));
     
-    const halfHFov = currentFov / 2;
-    if (Math.abs(headingDiff) > Math.min(85, halfHFov + 20)) return null;
-    if (Math.abs(pitchDiff) > 60) return null;
+    // Current POV center in 3D (this defines the image plane normal)
+    const x0 = f * cos_p0 * sin_h0;
+    const y0 = f * cos_p0 * cos_h0;
+    const z0 = f * sin_p0;
     
-    const focalLength = (screenWidth / 2) / Math.tan(toRad(currentFov / 2));
+    // Target direction scaled by focal length
+    // worldDir is now in PanoMarker's coordinate system (x=east, y=north, z=up)
+    const x = f * worldDir.x;
+    const y = f * worldDir.y;
+    const z = f * worldDir.z;
     
-    const centerX = screenWidth / 2 + focalLength * Math.tan(toRad(headingDiff));
-    const centerY = screenHeight / 2 - focalLength * Math.tan(toRad(pitchDiff));
+    // Check if target is in front of camera using dot product
+    const nDotD = x0 * x + y0 * y + z0 * z;
+    const nDotC = x0 * x0 + y0 * y0 + z0 * z0;  // = f^2
     
+    // Point is behind camera if dot product is <= 0
+    if (nDotD <= 0) return null;
+    
+    // Scale factor to intersect with image plane
+    const t = nDotC / nDotD;
+    
+    // Intersection point on image plane
+    const tx = t * x;
+    const ty = t * y;
+    const tz = t * z;
+    
+    // Image plane basis vectors (from PanoMarker)
+    // u = horizontal (heading direction), v = vertical (pitch direction)
+    const ux = cos_h0;
+    const uy = -sin_h0;
+    const uz = 0;
+    
+    const vx = -sin_p0 * sin_h0;
+    const vy = -sin_p0 * cos_h0;
+    const vz = cos_p0;
+    
+    // Project intersection point onto image plane basis
+    const du = (tx - x0) * ux + (ty - y0) * uy + (tz - z0) * uz;
+    const dv = (tx - x0) * vx + (ty - y0) * vy + (tz - z0) * vz;
+    
+    // Convert to screen coordinates
+    const screenX = screenWidth / 2 + du;
+    const screenY = screenHeight / 2 - dv;
+    
+    return { x: screenX, y: screenY };
+}
+
+/**
+ * Convert angular detection back to screen coordinates using proper 3D gnomonic projection.
+ */
+function angularToScreen(angularDet, currentHeading, currentPitch, currentFov, screenWidth, screenHeight) {
+    // Convert detection center to 3D direction
+    const centerDir = headingPitchToDirection(angularDet.heading, angularDet.pitch);
+    
+    // Project to screen
+    const centerScreen = directionToScreen(centerDir, currentHeading, currentPitch, currentFov, screenWidth, screenHeight);
+    if (!centerScreen) return null;
+    
+    // For the bounding box, we need to project the corners
     const halfAngW = angularDet.angularWidth / 2;
     const halfAngH = angularDet.angularHeight / 2;
     
-    const leftX = screenWidth / 2 + focalLength * Math.tan(toRad(headingDiff - halfAngW));
-    const rightX = screenWidth / 2 + focalLength * Math.tan(toRad(headingDiff + halfAngW));
-    const topY = screenHeight / 2 - focalLength * Math.tan(toRad(pitchDiff + halfAngH));
-    const bottomY = screenHeight / 2 - focalLength * Math.tan(toRad(pitchDiff - halfAngH));
+    // Project the four corners of the angular bounding box
+    const topLeftDir = headingPitchToDirection(angularDet.heading - halfAngW, angularDet.pitch + halfAngH);
+    const topRightDir = headingPitchToDirection(angularDet.heading + halfAngW, angularDet.pitch + halfAngH);
+    const bottomLeftDir = headingPitchToDirection(angularDet.heading - halfAngW, angularDet.pitch - halfAngH);
+    const bottomRightDir = headingPitchToDirection(angularDet.heading + halfAngW, angularDet.pitch - halfAngH);
     
-    const width = rightX - leftX;
-    const height = bottomY - topY;
+    const topLeft = directionToScreen(topLeftDir, currentHeading, currentPitch, currentFov, screenWidth, screenHeight);
+    const topRight = directionToScreen(topRightDir, currentHeading, currentPitch, currentFov, screenWidth, screenHeight);
+    const bottomLeft = directionToScreen(bottomLeftDir, currentHeading, currentPitch, currentFov, screenWidth, screenHeight);
+    const bottomRight = directionToScreen(bottomRightDir, currentHeading, currentPitch, currentFov, screenWidth, screenHeight);
     
-    if (centerX + width / 2 < 0 || centerX - width / 2 > screenWidth) return null;
-    if (centerY + height / 2 < 0 || centerY - height / 2 > screenHeight) return null;
+    // If any corner is behind the camera, skip this detection
+    if (!topLeft || !topRight || !bottomLeft || !bottomRight) return null;
+    
+    // Compute bounding box from projected corners
+    const minX = Math.min(topLeft.x, topRight.x, bottomLeft.x, bottomRight.x);
+    const maxX = Math.max(topLeft.x, topRight.x, bottomLeft.x, bottomRight.x);
+    const minY = Math.min(topLeft.y, topRight.y, bottomLeft.y, bottomRight.y);
+    const maxY = Math.max(topLeft.y, topRight.y, bottomLeft.y, bottomRight.y);
+    
+    const width = maxX - minX;
+    const height = maxY - minY;
+    
+    // Check if box is visible on screen
+    if (maxX < 0 || minX > screenWidth) return null;
+    if (maxY < 0 || minY > screenHeight) return null;
     
     return {
-        x: centerX - width / 2,
-        y: centerY - height / 2,
+        x: minX,
+        y: minY,
         width,
         height,
         confidence: angularDet.confidence,
         class_name: angularDet.class_name
     };
+}
+
+// Track mouse position for sign marking (document-level to work over bounding boxes)
+let lastMouseX = 0;
+let lastMouseY = 0;
+let lastMouseClientX = 0;
+let lastMouseClientY = 0;
+
+function trackMousePosition(event) {
+    // Store client coordinates - we'll convert to container-relative when needed
+    lastMouseClientX = event.clientX;
+    lastMouseClientY = event.clientY;
+    
+    const container = document.getElementById('detectionPanorama');
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    lastMouseX = event.clientX - rect.left;
+    lastMouseY = event.clientY - rect.top;
+}
+
+/**
+ * Convert screen pixel position to angular coordinates (heading/pitch).
+ * This is the inverse of PanoMarker's povToPixel3d function.
+ * Uses proper 3D vector-based gnomonic projection matching Google Street View.
+ */
+function screenToAngular(screenX, screenY, povHeading, povPitch, fov, screenWidth, screenHeight) {
+    const toRad = deg => deg * Math.PI / 180;
+    const toDeg = rad => rad * 180 / Math.PI;
+    
+    const h0 = toRad(povHeading);
+    const p0 = toRad(povPitch);
+    const cos_p0 = Math.cos(p0);
+    const sin_p0 = Math.sin(p0);
+    const cos_h0 = Math.cos(h0);
+    const sin_h0 = Math.sin(h0);
+    
+    // Focal length (must match directionToScreen)
+    const f = (screenWidth / 2) / Math.tan(toRad(fov / 2));
+    
+    // Convert screen to pixel offsets from center
+    const du = screenX - screenWidth / 2;
+    const dv = screenHeight / 2 - screenY;  // Flip Y
+    
+    // Current POV center in PanoMarker's 3D coordinate system
+    // (x = east, y = north/forward, z = up)
+    const x0 = f * cos_p0 * sin_h0;
+    const y0 = f * cos_p0 * cos_h0;
+    const z0 = f * sin_p0;
+    
+    // Image plane basis vectors (from PanoMarker)
+    const ux = cos_h0;
+    const uy = -sin_h0;
+    const uz = 0;
+    
+    const vx = -sin_p0 * sin_h0;
+    const vy = -sin_p0 * cos_h0;
+    const vz = cos_p0;
+    
+    // Calculate the 3D point on the image plane
+    const x = x0 + du * ux + dv * vx;
+    const y = y0 + du * uy + dv * vy;
+    const z = z0 + du * uz + dv * vz;
+    
+    // Convert to heading/pitch (PanoMarker's coordinate system)
+    // In PanoMarker: heading = atan2(x, y), pitch = asin(z / R)
+    const R = Math.sqrt(x * x + y * y + z * z);
+    const heading = toDeg(Math.atan2(x, y));
+    const pitch = toDeg(Math.asin(Math.max(-1, Math.min(1, z / R))));
+    
+    // Normalize heading to [0, 360)
+    const normalizedHeading = ((heading % 360) + 360) % 360;
+    
+    return {
+        heading: normalizedHeading,
+        pitch: pitch
+    };
+}
+
+/**
+ * Handle Ctrl key press to mark mouse position for coordinate data collection.
+ * Hover mouse over a sign, then press Ctrl to log coordinate data.
+ */
+async function handleSignMarking(event) {
+    // Only trigger on Ctrl key press (not release, not with other keys)
+    if (event.key !== 'Control' || event.repeat || !detectionPanorama) return;
+    
+    const container = document.getElementById('detectionPanorama');
+    const screenWidth = container.clientWidth;
+    const screenHeight = container.clientHeight;
+    
+    // Use mouse position
+    const screenX = lastMouseX;
+    const screenY = lastMouseY;
+    
+    // Check if mouse is within the panorama
+    if (screenX < 0 || screenX > screenWidth || screenY < 0 || screenY > screenHeight) {
+        console.log('Mouse is outside panorama area');
+        return;
+    }
+    
+    const pov = detectionPanorama.getPov();
+    const currentFov = zoomToFov(pov.zoom || 1);
+    const panoId = detectionPanorama.getPano();
+    
+    // Convert screen position to angular coordinates
+    const angular = screenToAngular(screenX, screenY, pov.heading, pov.pitch, currentFov, screenWidth, screenHeight);
+    
+    // Get panorama metadata
+    let panoHeading = 0;
+    try {
+        const session = await getSessionToken();
+        const metadata = await fetchStreetViewMetadata(panoId, session);
+        panoHeading = metadata.heading || 0;
+    } catch (err) {
+        console.warn('Could not fetch metadata:', err);
+    }
+    
+    // Convert to equirectangular at MAX zoom (for cropping)
+    const maxZoomPixel = headingPitchToPixel(angular.heading, angular.pitch, TILE_GRID_WIDTH, TILE_GRID_HEIGHT, panoHeading);
+    
+    // Calculate what screen position this would map to if we go from max zoom -> current view
+    // This tests our round-trip conversion
+    const backToAngular = pixelToHeadingPitch(maxZoomPixel.x, maxZoomPixel.y, TILE_GRID_WIDTH, TILE_GRID_HEIGHT, panoHeading);
+    
+    // Test screen round-trip using proper 3D projection
+    const worldDir = headingPitchToDirection(backToAngular.heading, backToAngular.pitch);
+    const backToScreenPos = directionToScreen(worldDir, pov.heading, pov.pitch, currentFov, screenWidth, screenHeight);
+    const backToScreenX = backToScreenPos ? backToScreenPos.x : NaN;
+    const backToScreenY = backToScreenPos ? backToScreenPos.y : NaN;
+    
+    // Log comprehensive data (using JSON.stringify for auto-expanded output)
+    console.log('=== SIGN MARKING DATA ===');
+    console.log('Mouse Position (screen): ' + JSON.stringify({
+        x: screenX.toFixed(1),
+        y: screenY.toFixed(1),
+        screenWidth,
+        screenHeight
+    }));
+    console.log('Current View: ' + JSON.stringify({
+        povHeading: pov.heading.toFixed(2),
+        povPitch: pov.pitch.toFixed(2),
+        zoom: pov.zoom?.toFixed(2),
+        fov: currentFov.toFixed(2)
+    }));
+    console.log('Angular Position: ' + JSON.stringify({
+        heading: angular.heading.toFixed(4),
+        pitch: angular.pitch.toFixed(4)
+    }));
+    console.log('Max Zoom Equirectangular (crop coords): ' + JSON.stringify({
+        x: maxZoomPixel.x.toFixed(1),
+        y: maxZoomPixel.y.toFixed(1),
+        panoHeading: panoHeading.toFixed(2),
+        gridSize: `${TILE_GRID_WIDTH}x${TILE_GRID_HEIGHT}`
+    }));
+    console.log('Round-trip back to angular: ' + JSON.stringify({
+        heading: backToAngular.heading.toFixed(4),
+        pitch: backToAngular.pitch.toFixed(4),
+        headingDelta: (backToAngular.heading - angular.heading).toFixed(4),
+        pitchDelta: (backToAngular.pitch - angular.pitch).toFixed(4)
+    }));
+    console.log('Round-trip back to screen (direct calc): ' + JSON.stringify({
+        x: backToScreenX.toFixed(1),
+        y: backToScreenY.toFixed(1),
+        deltaX: (backToScreenX - screenX).toFixed(1),
+        deltaY: (backToScreenY - screenY).toFixed(1)
+    }));
+    
+    // Draw a marker at the mouse position
+    const overlay = document.getElementById('detectionOverlay');
+    if (overlay) {
+        // Remove previous markers
+        overlay.querySelectorAll('.sign-marker').forEach(el => el.remove());
+        
+        // Draw crosshair at mouse position (lime = where you clicked)
+        const crosshairSize = 30;
+        const marker = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        marker.classList.add('sign-marker');
+        
+        // Horizontal line
+        const hLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        hLine.setAttribute('x1', screenX - crosshairSize);
+        hLine.setAttribute('y1', screenY);
+        hLine.setAttribute('x2', screenX + crosshairSize);
+        hLine.setAttribute('y2', screenY);
+        hLine.setAttribute('stroke', 'lime');
+        hLine.setAttribute('stroke-width', '3');
+        marker.appendChild(hLine);
+        
+        // Vertical line
+        const vLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        vLine.setAttribute('x1', screenX);
+        vLine.setAttribute('y1', screenY - crosshairSize);
+        vLine.setAttribute('x2', screenX);
+        vLine.setAttribute('y2', screenY + crosshairSize);
+        vLine.setAttribute('stroke', 'lime');
+        vLine.setAttribute('stroke-width', '3');
+        marker.appendChild(vLine);
+        
+        // If round-trip gives different position, show that too (red = round-trip result)
+        if (Math.abs(backToScreenX - screenX) > 2 || Math.abs(backToScreenY - screenY) > 2) {
+            const rtLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            rtLine.setAttribute('x1', screenX);
+            rtLine.setAttribute('y1', screenY);
+            rtLine.setAttribute('x2', backToScreenX);
+            rtLine.setAttribute('y2', backToScreenY);
+            rtLine.setAttribute('stroke', 'red');
+            rtLine.setAttribute('stroke-width', '2');
+            rtLine.setAttribute('stroke-dasharray', '4,4');
+            marker.appendChild(rtLine);
+            
+            // Small circle at round-trip position
+            const rtCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            rtCircle.setAttribute('cx', backToScreenX);
+            rtCircle.setAttribute('cy', backToScreenY);
+            rtCircle.setAttribute('r', '8');
+            rtCircle.setAttribute('fill', 'none');
+            rtCircle.setAttribute('stroke', 'red');
+            rtCircle.setAttribute('stroke-width', '2');
+            marker.appendChild(rtCircle);
+        }
+        
+        overlay.appendChild(marker);
+    }
+    
+    console.log('=========================');
 }
 
 /**
@@ -246,8 +592,8 @@ function updateDetectionOverlay() {
     const height = container.clientHeight;
     const fov = zoomToFov(pov.zoom || 1);
     
-    // Clear existing boxes
-    overlay.innerHTML = '';
+    // Clear existing boxes (but keep markers)
+    overlay.querySelectorAll(':not(.sign-marker)').forEach(el => el.remove());
     
     // Draw each detection if visible
     for (const det of currentDetections) {
@@ -284,9 +630,27 @@ function updateDetectionOverlay() {
         });
         
         // Click to save sign
-        rect.addEventListener('click', (e) => {
+        rect.addEventListener('click', async (e) => {
             e.stopPropagation();
             e.preventDefault();
+            
+            // Log detection coordinates for comparison with Ctrl+mark
+            const panoId = detectionPanorama.getPano();
+            let panoHeading = 0;
+            try {
+                const session = await getSessionToken();
+                const metadata = await fetchStreetViewMetadata(panoId, session);
+                panoHeading = metadata.heading || 0;
+            } catch (err) {}
+            
+            const eqPixel = headingPitchToPixel(det.heading, det.pitch, TILE_GRID_WIDTH, TILE_GRID_HEIGHT, panoHeading);
+            console.log('=== DETECTION BOX COORDINATES ===');
+            console.log('Angular: ' + JSON.stringify({ heading: det.heading.toFixed(4), pitch: det.pitch.toFixed(4) }));
+            console.log('Equirectangular: ' + JSON.stringify({ x: eqPixel.x.toFixed(1), y: eqPixel.y.toFixed(1) }));
+            console.log('Detection FOV was: ' + (detectionPov.fov?.toFixed(2) || 'unknown'));
+            console.log('Compare with Ctrl+mark on same sign to check for offset');
+            console.log('=================================');
+            
             cropAndSaveSign(det);
         });
         rect.addEventListener('mousedown', (e) => e.stopPropagation());
@@ -340,6 +704,10 @@ function initDetectionPanorama(panoId, heading, container) {
         
         povChangeListener = detectionPanorama.addListener('pov_changed', updateDetectionOverlay);
         panoChangeListener = detectionPanorama.addListener('pano_changed', clearDetections);
+        
+        // Track mouse position at document level (works over bounding boxes too)
+        document.addEventListener('mousemove', trackMousePosition);
+        document.addEventListener('keydown', handleSignMarking);
     }
     
     currentDetections = [];
