@@ -27,17 +27,64 @@ const TILE_GRID_WIDTH = 32 * TILE_SIZE;   // 16384
 const TILE_GRID_HEIGHT = 16 * TILE_SIZE;  // 8192
 
 /**
- * Convert heading/pitch to pixel coordinates in the full panorama.
- * Uses equirectangular projection.
+ * Convert heading/pitch to pixel coordinates in the full panorama tile image.
+ * 
+ * The tile image is in the CAMERA's coordinate frame, which includes the camera's
+ * heading, tilt, and roll. To correctly map world angular coordinates to tile pixels,
+ * we must undo all three rotations using a full 3D rotation matrix.
+ * 
+ * @param {number} heading - World heading in degrees (compass bearing)
+ * @param {number} pitch - World pitch in degrees (positive=up, negative=down)
+ * @param {number} imageWidth - Panorama tile grid width in pixels
+ * @param {number} imageHeight - Panorama tile grid height in pixels
+ * @param {number} panoHeading - Camera heading from metadata (degrees)
+ * @param {number} tilt - Camera tilt from metadata (90=level, >90=down)
+ * @param {number} roll - Camera roll from metadata (degrees, 0=level)
  */
-function headingPitchToPixel(heading, pitch, imageWidth, imageHeight, panoHeading = 0) {
-    // Convert compass heading to panorama-relative heading
-    // Add 180° because x=0 is the BACK of the panorama, not the front
-    let h = (heading - panoHeading + 180 + 360) % 360;
+function headingPitchToPixel(heading, pitch, imageWidth, imageHeight, panoHeading = 0, tilt = 90, roll = 0) {
+    const toRad = deg => deg * Math.PI / 180;
+    const toDeg = rad => rad * 180 / Math.PI;
     
-    // Equirectangular projection
-    const x = (h / 360) * imageWidth;
-    const y = ((90 - pitch) / 180) * imageHeight;
+    // Convert world (heading, pitch) to 3D direction vector
+    // PanoMarker convention: x=East, y=North, z=Up
+    const dir = headingPitchToDirection(heading, pitch);
+    
+    // === World-to-Camera rotation: undo heading, tilt, roll ===
+    // R_world_to_camera = Ry(-roll) * Rx(tilt-90) * Rz(panoHeading)
+    //
+    // Note on Rz sign: heading is measured CW from North, but Rz rotates CCW.
+    // Rz(+panoHeading) undoes a CW heading rotation (verified empirically).
+    
+    // Step 1: Rz(+panoHeading) — undo camera heading
+    const h0 = toRad(panoHeading);
+    const cosH = Math.cos(h0), sinH = Math.sin(h0);
+    const x1 =  cosH * dir.x + (-sinH) * dir.y;
+    const y1 =  sinH * dir.x +   cosH  * dir.y;
+    const z1 = dir.z;
+    
+    // Step 2: Rx(tilt - 90) — undo camera tilt
+    const elev = toRad(tilt - 90);
+    const cosE = Math.cos(elev), sinE = Math.sin(elev);
+    const x2 = x1;
+    const y2 =  cosE * y1 + (-sinE) * z1;
+    const z2 =  sinE * y1 +   cosE  * z1;
+    
+    // Step 3: Ry(-roll) — undo camera roll
+    const r = toRad(-roll);
+    const cosR = Math.cos(r), sinR = Math.sin(r);
+    const x3 =  cosR * x2 + sinR * z2;
+    const y3 = y2;
+    const z3 = -sinR * x2 + cosR * z2;
+    
+    // Convert camera-frame direction to camera heading/pitch
+    const camHeading = toDeg(Math.atan2(x3, y3));
+    const camPitch = toDeg(Math.asin(Math.max(-1, Math.min(1, z3))));
+    
+    // Map to equirectangular pixel coordinates
+    // x=0 is the back of the camera (+180° from forward)
+    const pixelH = ((camHeading + 180 + 360) % 360);
+    const x = (pixelH / 360) * imageWidth;
+    const y = ((90 - camPitch) / 180) * imageHeight;
     
     return { x, y };
 }
@@ -461,122 +508,26 @@ async function handleSignMarking(event) {
     
     // Get panorama metadata
     let panoHeading = 0;
+    let tilt = 90;
+    let roll = 0;
     try {
         const session = await getSessionToken();
         const metadata = await fetchStreetViewMetadata(panoId, session);
         panoHeading = metadata.heading || 0;
+        tilt = metadata.tilt ?? 90;
+        roll = metadata.roll ?? 0;
     } catch (err) {
         console.warn('Could not fetch metadata:', err);
     }
     
-    // Convert to equirectangular at MAX zoom (for cropping)
-    const maxZoomPixel = headingPitchToPixel(angular.heading, angular.pitch, TILE_GRID_WIDTH, TILE_GRID_HEIGHT, panoHeading);
+    // Convert to equirectangular at MAX zoom (for cropping) with tilt/roll correction
+    const maxZoomPixel = headingPitchToPixel(angular.heading, angular.pitch, TILE_GRID_WIDTH, TILE_GRID_HEIGHT, panoHeading, tilt, roll);
     
-    // Calculate what screen position this would map to if we go from max zoom -> current view
-    // This tests our round-trip conversion
-    const backToAngular = pixelToHeadingPitch(maxZoomPixel.x, maxZoomPixel.y, TILE_GRID_WIDTH, TILE_GRID_HEIGHT, panoHeading);
-    
-    // Test screen round-trip using proper 3D projection
-    const worldDir = headingPitchToDirection(backToAngular.heading, backToAngular.pitch);
-    const backToScreenPos = directionToScreen(worldDir, pov.heading, pov.pitch, currentFov, screenWidth, screenHeight);
-    const backToScreenX = backToScreenPos ? backToScreenPos.x : NaN;
-    const backToScreenY = backToScreenPos ? backToScreenPos.y : NaN;
-    
-    // Log comprehensive data (using JSON.stringify for auto-expanded output)
-    console.log('=== SIGN MARKING DATA ===');
-    console.log('Mouse Position (screen): ' + JSON.stringify({
-        x: screenX.toFixed(1),
-        y: screenY.toFixed(1),
-        screenWidth,
-        screenHeight
-    }));
-    console.log('Current View: ' + JSON.stringify({
-        povHeading: pov.heading.toFixed(2),
-        povPitch: pov.pitch.toFixed(2),
-        zoom: pov.zoom?.toFixed(2),
-        fov: currentFov.toFixed(2)
-    }));
-    console.log('Angular Position: ' + JSON.stringify({
-        heading: angular.heading.toFixed(4),
-        pitch: angular.pitch.toFixed(4)
-    }));
-    console.log('Max Zoom Equirectangular (crop coords): ' + JSON.stringify({
-        x: maxZoomPixel.x.toFixed(1),
-        y: maxZoomPixel.y.toFixed(1),
-        panoHeading: panoHeading.toFixed(2),
-        gridSize: `${TILE_GRID_WIDTH}x${TILE_GRID_HEIGHT}`
-    }));
-    console.log('Round-trip back to angular: ' + JSON.stringify({
-        heading: backToAngular.heading.toFixed(4),
-        pitch: backToAngular.pitch.toFixed(4),
-        headingDelta: (backToAngular.heading - angular.heading).toFixed(4),
-        pitchDelta: (backToAngular.pitch - angular.pitch).toFixed(4)
-    }));
-    console.log('Round-trip back to screen (direct calc): ' + JSON.stringify({
-        x: backToScreenX.toFixed(1),
-        y: backToScreenY.toFixed(1),
-        deltaX: (backToScreenX - screenX).toFixed(1),
-        deltaY: (backToScreenY - screenY).toFixed(1)
-    }));
-    
-    // Draw a marker at the mouse position
-    const overlay = document.getElementById('detectionOverlay');
-    if (overlay) {
-        // Remove previous markers
-        overlay.querySelectorAll('.sign-marker').forEach(el => el.remove());
-        
-        // Draw crosshair at mouse position (lime = where you clicked)
-        const crosshairSize = 30;
-        const marker = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-        marker.classList.add('sign-marker');
-        
-        // Horizontal line
-        const hLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        hLine.setAttribute('x1', screenX - crosshairSize);
-        hLine.setAttribute('y1', screenY);
-        hLine.setAttribute('x2', screenX + crosshairSize);
-        hLine.setAttribute('y2', screenY);
-        hLine.setAttribute('stroke', 'lime');
-        hLine.setAttribute('stroke-width', '3');
-        marker.appendChild(hLine);
-        
-        // Vertical line
-        const vLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        vLine.setAttribute('x1', screenX);
-        vLine.setAttribute('y1', screenY - crosshairSize);
-        vLine.setAttribute('x2', screenX);
-        vLine.setAttribute('y2', screenY + crosshairSize);
-        vLine.setAttribute('stroke', 'lime');
-        vLine.setAttribute('stroke-width', '3');
-        marker.appendChild(vLine);
-        
-        // If round-trip gives different position, show that too (red = round-trip result)
-        if (Math.abs(backToScreenX - screenX) > 2 || Math.abs(backToScreenY - screenY) > 2) {
-            const rtLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-            rtLine.setAttribute('x1', screenX);
-            rtLine.setAttribute('y1', screenY);
-            rtLine.setAttribute('x2', backToScreenX);
-            rtLine.setAttribute('y2', backToScreenY);
-            rtLine.setAttribute('stroke', 'red');
-            rtLine.setAttribute('stroke-width', '2');
-            rtLine.setAttribute('stroke-dasharray', '4,4');
-            marker.appendChild(rtLine);
-            
-            // Small circle at round-trip position
-            const rtCircle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-            rtCircle.setAttribute('cx', backToScreenX);
-            rtCircle.setAttribute('cy', backToScreenY);
-            rtCircle.setAttribute('r', '8');
-            rtCircle.setAttribute('fill', 'none');
-            rtCircle.setAttribute('stroke', 'red');
-            rtCircle.setAttribute('stroke-width', '2');
-            marker.appendChild(rtCircle);
-        }
-        
-        overlay.appendChild(marker);
-    }
-    
-    console.log('=========================');
+    console.log('Sign marked:', {
+        screen: `(${screenX.toFixed(0)}, ${screenY.toFixed(0)})`,
+        angular: `h=${angular.heading.toFixed(2)}° p=${angular.pitch.toFixed(2)}°`,
+        equirect: `(${maxZoomPixel.x.toFixed(0)}, ${maxZoomPixel.y.toFixed(0)})`
+    });
 }
 
 /**
@@ -633,23 +584,6 @@ function updateDetectionOverlay() {
         rect.addEventListener('click', async (e) => {
             e.stopPropagation();
             e.preventDefault();
-            
-            // Log detection coordinates for comparison with Ctrl+mark
-            const panoId = detectionPanorama.getPano();
-            let panoHeading = 0;
-            try {
-                const session = await getSessionToken();
-                const metadata = await fetchStreetViewMetadata(panoId, session);
-                panoHeading = metadata.heading || 0;
-            } catch (err) {}
-            
-            const eqPixel = headingPitchToPixel(det.heading, det.pitch, TILE_GRID_WIDTH, TILE_GRID_HEIGHT, panoHeading);
-            console.log('=== DETECTION BOX COORDINATES ===');
-            console.log('Angular: ' + JSON.stringify({ heading: det.heading.toFixed(4), pitch: det.pitch.toFixed(4) }));
-            console.log('Equirectangular: ' + JSON.stringify({ x: eqPixel.x.toFixed(1), y: eqPixel.y.toFixed(1) }));
-            console.log('Detection FOV was: ' + (detectionPov.fov?.toFixed(2) || 'unknown'));
-            console.log('Compare with Ctrl+mark on same sign to check for offset');
-            console.log('=================================');
             
             cropAndSaveSign(det);
         });
@@ -820,8 +754,10 @@ async function cropAndSaveSign(det) {
         const imageWidth = TILE_GRID_WIDTH;
         const imageHeight = TILE_GRID_HEIGHT;
         const panoHeading = metadata.heading || 0;
+        const tilt = metadata.tilt ?? 90;
+        const roll = metadata.roll ?? 0;
         
-        const signCenter = headingPitchToPixel(det.heading, det.pitch, imageWidth, imageHeight, panoHeading);
+        const signCenter = headingPitchToPixel(det.heading, det.pitch, imageWidth, imageHeight, panoHeading, tilt, roll);
         const signSize = angularToPixelSize(det.angularWidth, det.angularHeight, imageWidth, imageHeight);
         
         const { tiles, tileX1, tileY1, cropBounds } = getTilesForRegion(

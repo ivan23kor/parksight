@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 from pydantic import BaseModel
 from ultralytics import YOLO
 
@@ -262,7 +262,7 @@ async def crop_sign_tiles(request: CropSignTilesRequest):
     # Crop the sign region
     cropped = stitched.crop((x1, y1, x2, y2))
     
-    # Save cropped image
+    # Save cropped sign
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{timestamp}_conf{request.confidence:.2f}.jpg"
     cropped.save(DETECTED_SIGNS_DIR / filename, quality=95)
