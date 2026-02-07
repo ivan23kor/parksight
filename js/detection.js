@@ -28,64 +28,21 @@ const TILE_GRID_HEIGHT = 16 * TILE_SIZE;  // 8192
 
 /**
  * Convert heading/pitch to pixel coordinates in the full panorama tile image.
- * 
- * The tile image is in the CAMERA's coordinate frame, which includes the camera's
- * heading, tilt, and roll. To correctly map world angular coordinates to tile pixels,
- * we must undo all three rotations using a full 3D rotation matrix.
- * 
+ *
+ * Google Street View tiles are in a stabilized equirectangular frame where
+ * roll has already been applied and tilt describes where the horizon sits.
+ * Only the camera heading rotation needs to be undone.
+ *
  * @param {number} heading - World heading in degrees (compass bearing)
  * @param {number} pitch - World pitch in degrees (positive=up, negative=down)
  * @param {number} imageWidth - Panorama tile grid width in pixels
  * @param {number} imageHeight - Panorama tile grid height in pixels
  * @param {number} panoHeading - Camera heading from metadata (degrees)
- * @param {number} tilt - Camera tilt from metadata (90=level, >90=down)
- * @param {number} roll - Camera roll from metadata (degrees, 0=level)
  */
-function headingPitchToPixel(heading, pitch, imageWidth, imageHeight, panoHeading = 0, tilt = 90, roll = 0) {
-    const toRad = deg => deg * Math.PI / 180;
-    const toDeg = rad => rad * 180 / Math.PI;
-    
-    // Convert world (heading, pitch) to 3D direction vector
-    // PanoMarker convention: x=East, y=North, z=Up
-    const dir = headingPitchToDirection(heading, pitch);
-    
-    // === World-to-Camera rotation: undo heading, tilt, roll ===
-    // R_world_to_camera = Ry(-roll) * Rx(tilt-90) * Rz(panoHeading)
-    //
-    // Note on Rz sign: heading is measured CW from North, but Rz rotates CCW.
-    // Rz(+panoHeading) undoes a CW heading rotation (verified empirically).
-    
-    // Step 1: Rz(+panoHeading) — undo camera heading
-    const h0 = toRad(panoHeading);
-    const cosH = Math.cos(h0), sinH = Math.sin(h0);
-    const x1 =  cosH * dir.x + (-sinH) * dir.y;
-    const y1 =  sinH * dir.x +   cosH  * dir.y;
-    const z1 = dir.z;
-    
-    // Step 2: Rx(tilt - 90) — undo camera tilt
-    const elev = toRad(tilt - 90);
-    const cosE = Math.cos(elev), sinE = Math.sin(elev);
-    const x2 = x1;
-    const y2 =  cosE * y1 + (-sinE) * z1;
-    const z2 =  sinE * y1 +   cosE  * z1;
-    
-    // Step 3: Ry(-roll) — undo camera roll
-    const r = toRad(-roll);
-    const cosR = Math.cos(r), sinR = Math.sin(r);
-    const x3 =  cosR * x2 + sinR * z2;
-    const y3 = y2;
-    const z3 = -sinR * x2 + cosR * z2;
-    
-    // Convert camera-frame direction to camera heading/pitch
-    const camHeading = toDeg(Math.atan2(x3, y3));
-    const camPitch = toDeg(Math.asin(Math.max(-1, Math.min(1, z3))));
-    
-    // Map to equirectangular pixel coordinates
-    // x=0 is the back of the camera (+180° from forward)
-    const pixelH = ((camHeading + 180 + 360) % 360);
-    const x = (pixelH / 360) * imageWidth;
-    const y = ((90 - camPitch) / 180) * imageHeight;
-    
+function headingPitchToPixel(heading, pitch, imageWidth, imageHeight, panoHeading = 0) {
+    let h = (heading - panoHeading + 180 + 360) % 360;
+    const x = (h / 360) * imageWidth;
+    const y = ((90 - pitch) / 180) * imageHeight;
     return { x, y };
 }
 
@@ -477,9 +434,75 @@ function screenToAngular(screenX, screenY, povHeading, povPitch, fov, screenWidt
     };
 }
 
+// Store marked ground truth points for offset analysis
+let markedPoints = [];
+let cachedPanoMetadata = null;
+
+/**
+ * Apply empirical correction to tile pixel coordinates.
+ * Based on analysis of measured offsets, the correction depends on:
+ * - Relative heading from camera forward (cos term)
+ * - Pitch (linear term)
+ * - Tilt deviation from level (scales the correction)
+ * 
+ * Model: y_offset = (A * cos(relH + 180) + B * pitch + C) * tiltFactor
+ * From 5-point calibration at tilt=91.39°: A=86.23, B=-8.12, C=-49.82
+ * 
+ * IMPORTANT: Only calibrated for signs BEHIND the camera (|relH| > 90°).
+ * For signs in front of camera, no correction is applied.
+ */
+function computeYCorrection(heading, pitch, panoHeading, tilt) {
+    let relH = heading - panoHeading;
+    if (relH < -180) relH += 360;
+    if (relH > 180) relH -= 360;
+    
+    // Only apply correction for signs behind the camera (|relH| > 90°)
+    if (Math.abs(relH) < 90) {
+        return 0;
+    }
+    
+    // Scale correction by how much tilt differs from 90° (level)
+    // Calibration was at tilt=91.39° (offset of 1.39° from level)
+    const CALIBRATION_TILT_OFFSET = 1.39;
+    const tiltFactor = (tilt - 90) / CALIBRATION_TILT_OFFSET;
+    
+    // Skip if tilt is very close to level
+    if (Math.abs(tiltFactor) < 0.1) {
+        return 0;
+    }
+    
+    // Empirical coefficients from calibration data (tilt=91.39°)
+    const A = 86.23;
+    const B = -8.12;
+    const C = -49.82;
+    
+    const cosTerm = Math.cos((relH + 180) * Math.PI / 180);
+    const baseOffset = A * cosTerm + B * pitch + C;
+    
+    return baseOffset * tiltFactor;
+}
+
+/**
+ * Convert heading/pitch to CORRECTED pixel coordinates for tile cropping.
+ * Applies empirical correction for Google's tile stabilization.
+ */
+function headingPitchToPixelCorrected(heading, pitch, imageWidth, imageHeight, panoHeading = 0, tilt = 90) {
+    // Base equirectangular mapping
+    let h = (heading - panoHeading + 180 + 360) % 360;
+    const x = (h / 360) * imageWidth;
+    const yBase = ((90 - pitch) / 180) * imageHeight;
+    
+    // Apply empirical Y correction (only for behind-camera signs with tilted panos)
+    const yCorrection = computeYCorrection(heading, pitch, panoHeading, tilt);
+    const y = yBase - yCorrection;  // Subtract because offset was "crop below actual"
+    
+    return { x, y, yCorrection };
+}
+
 /**
  * Handle Ctrl key press to mark mouse position for coordinate data collection.
- * Hover mouse over a sign, then press Ctrl to log coordinate data.
+ * Hover mouse over a sign center, then press Ctrl to mark it.
+ * Shows visual marker and logs data for offset analysis.
  */
 async function handleSignMarking(event) {
     // Only trigger on Ctrl key press (not release, not with other keys)
@@ -489,11 +512,9 @@ async function handleSignMarking(event) {
     const screenWidth = container.clientWidth;
     const screenHeight = container.clientHeight;
     
-    // Use mouse position
     const screenX = lastMouseX;
     const screenY = lastMouseY;
     
-    // Check if mouse is within the panorama
     if (screenX < 0 || screenX > screenWidth || screenY < 0 || screenY > screenHeight) {
         console.log('Mouse is outside panorama area');
         return;
@@ -506,28 +527,122 @@ async function handleSignMarking(event) {
     // Convert screen position to angular coordinates
     const angular = screenToAngular(screenX, screenY, pov.heading, pov.pitch, currentFov, screenWidth, screenHeight);
     
-    // Get panorama metadata
-    let panoHeading = 0;
-    let tilt = 90;
-    let roll = 0;
-    try {
-        const session = await getSessionToken();
-        const metadata = await fetchStreetViewMetadata(panoId, session);
-        panoHeading = metadata.heading || 0;
-        tilt = metadata.tilt ?? 90;
-        roll = metadata.roll ?? 0;
-    } catch (err) {
-        console.warn('Could not fetch metadata:', err);
+    // Get panorama metadata (cache it)
+    if (!cachedPanoMetadata || cachedPanoMetadata.panoId !== panoId) {
+        try {
+            const session = await getSessionToken();
+            const metadata = await fetchStreetViewMetadata(panoId, session);
+            cachedPanoMetadata = { ...metadata, panoId };
+        } catch (err) {
+            console.warn('Could not fetch metadata:', err);
+            cachedPanoMetadata = { heading: 0, tilt: 90, roll: 0, panoId };
+        }
     }
     
-    // Convert to equirectangular at MAX zoom (for cropping) with tilt/roll correction
-    const maxZoomPixel = headingPitchToPixel(angular.heading, angular.pitch, TILE_GRID_WIDTH, TILE_GRID_HEIGHT, panoHeading, tilt, roll);
+    const panoHeading = cachedPanoMetadata.heading || 0;
+    const tilt = cachedPanoMetadata.tilt ?? 90;
+    const roll = cachedPanoMetadata.roll ?? 0;
     
-    console.log('Sign marked:', {
-        screen: `(${screenX.toFixed(0)}, ${screenY.toFixed(0)})`,
-        angular: `h=${angular.heading.toFixed(2)}° p=${angular.pitch.toFixed(2)}°`,
-        equirect: `(${maxZoomPixel.x.toFixed(0)}, ${maxZoomPixel.y.toFixed(0)})`
-    });
+    // Compute both uncorrected and corrected pixel positions
+    const uncorrected = headingPitchToPixel(angular.heading, angular.pitch, TILE_GRID_WIDTH, TILE_GRID_HEIGHT, panoHeading);
+    const corrected = headingPitchToPixelCorrected(angular.heading, angular.pitch, TILE_GRID_WIDTH, TILE_GRID_HEIGHT, panoHeading, tilt);
+    
+    // Calculate relative heading for analysis
+    let relH = angular.heading - panoHeading;
+    if (relH < -180) relH += 360;
+    if (relH > 180) relH -= 360;
+    
+    // Store marked point
+    const markedPoint = {
+        panoId,
+        panoHeading,
+        tilt,
+        roll,
+        heading: angular.heading,
+        pitch: angular.pitch,
+        relH,
+        screenX,
+        screenY,
+        uncorrectedX: uncorrected.x,
+        uncorrectedY: uncorrected.y,
+        correctedX: corrected.x,
+        correctedY: corrected.y,
+        yCorrection: corrected.yCorrection,
+        timestamp: Date.now()
+    };
+    markedPoints.push(markedPoint);
+    
+    // Add visual marker on overlay
+    addMarkerToOverlay(screenX, screenY, markedPoints.length);
+    
+    console.log(
+        `MARK #${markedPoints.length}: h=${angular.heading.toFixed(2)}° p=${angular.pitch.toFixed(2)}° relH=${relH.toFixed(2)}° tilt=${tilt.toFixed(2)}°\n` +
+        `  uncorrected: (${uncorrected.x.toFixed(0)}, ${uncorrected.y.toFixed(0)}) corrected: (${corrected.x.toFixed(0)}, ${corrected.y.toFixed(0)}) yCorr=${corrected.yCorrection.toFixed(1)}px`
+    );
+    
+    // Update status
+    const statusEl = document.getElementById('status') || document.getElementById('detectionStatus');
+    if (statusEl) {
+        statusEl.textContent = `Marked point #${markedPoints.length} at h=${angular.heading.toFixed(1)}° p=${angular.pitch.toFixed(1)}° (correction: ${corrected.yCorrection.toFixed(0)}px)`;
+    }
+}
+
+/**
+ * Add visual marker to the detection overlay.
+ */
+function addMarkerToOverlay(screenX, screenY, number) {
+    const overlay = document.getElementById('detectionOverlay');
+    if (!overlay) return;
+    
+    // Create marker group
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.classList.add('sign-marker');
+    g.setAttribute('data-marker-num', number);
+    
+    // Crosshair
+    const size = 12;
+    const line1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line1.setAttribute('x1', screenX - size);
+    line1.setAttribute('y1', screenY);
+    line1.setAttribute('x2', screenX + size);
+    line1.setAttribute('y2', screenY);
+    line1.setAttribute('stroke', '#00ff00');
+    line1.setAttribute('stroke-width', '2');
+    
+    const line2 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line2.setAttribute('x1', screenX);
+    line2.setAttribute('y1', screenY - size);
+    line2.setAttribute('x2', screenX);
+    line2.setAttribute('y2', screenY + size);
+    line2.setAttribute('stroke', '#00ff00');
+    line2.setAttribute('stroke-width', '2');
+    
+    // Number label
+    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    text.setAttribute('x', screenX + size + 4);
+    text.setAttribute('y', screenY - size);
+    text.setAttribute('fill', '#00ff00');
+    text.setAttribute('font-size', '14');
+    text.setAttribute('font-weight', 'bold');
+    text.textContent = `#${number}`;
+    
+    g.appendChild(line1);
+    g.appendChild(line2);
+    g.appendChild(text);
+    overlay.appendChild(g);
+}
+
+/**
+ * Clear all marked points and visual markers.
+ */
+function clearMarkedPoints() {
+    markedPoints = [];
+    cachedPanoMetadata = null;
+    const overlay = document.getElementById('detectionOverlay');
+    if (overlay) {
+        overlay.querySelectorAll('.sign-marker').forEach(el => el.remove());
+    }
+    console.log('Cleared all marked points');
 }
 
 /**
@@ -642,10 +757,24 @@ function initDetectionPanorama(panoId, heading, container) {
         // Track mouse position at document level (works over bounding boxes too)
         document.addEventListener('mousemove', trackMousePosition);
         document.addEventListener('keydown', handleSignMarking);
+        document.addEventListener('keydown', handleMarkerKeyboard);
     }
     
     currentDetections = [];
+    markedPoints = [];
+    cachedPanoMetadata = null;
     updateDetectionOverlay();
+}
+
+/**
+ * Handle keyboard shortcuts for marker management.
+ */
+function handleMarkerKeyboard(event) {
+    if (event.key === 'Escape' && markedPoints.length > 0) {
+        clearMarkedPoints();
+        const statusEl = document.getElementById('status') || document.getElementById('detectionStatus');
+        if (statusEl) statusEl.textContent = 'Markers cleared. Ctrl+click to mark sign centers.';
+    }
 }
 
 /**
@@ -755,13 +884,26 @@ async function cropAndSaveSign(det) {
         const imageHeight = TILE_GRID_HEIGHT;
         const panoHeading = metadata.heading || 0;
         const tilt = metadata.tilt ?? 90;
-        const roll = metadata.roll ?? 0;
         
-        const signCenter = headingPitchToPixel(det.heading, det.pitch, imageWidth, imageHeight, panoHeading, tilt, roll);
+        // Compute both uncorrected and corrected coordinates for comparison
+        const uncorrected = headingPitchToPixel(det.heading, det.pitch, imageWidth, imageHeight, panoHeading);
+        const corrected = headingPitchToPixelCorrected(det.heading, det.pitch, imageWidth, imageHeight, panoHeading, tilt);
         const signSize = angularToPixelSize(det.angularWidth, det.angularHeight, imageWidth, imageHeight);
         
+        // Calculate relative heading for context
+        let relH = det.heading - panoHeading;
+        if (relH < -180) relH += 360;
+        if (relH > 180) relH -= 360;
+        
+        console.log(
+            `CROP DEBUG: pano=${panoId} panoH=${panoHeading.toFixed(1)}° tilt=${(metadata.tilt ?? 90).toFixed(2)}°\n` +
+            `  detection: h=${det.heading.toFixed(2)}° p=${det.pitch.toFixed(2)}° relH=${relH.toFixed(2)}° size=${det.angularWidth.toFixed(2)}°x${det.angularHeight.toFixed(2)}°\n` +
+            `  uncorrected: (${uncorrected.x.toFixed(0)}, ${uncorrected.y.toFixed(0)}) corrected: (${corrected.x.toFixed(0)}, ${corrected.y.toFixed(0)}) yCorr=${corrected.yCorrection.toFixed(1)}px size=${signSize.width.toFixed(0)}x${signSize.height.toFixed(0)}`
+        );
+        
+        // Use corrected coordinates with 1.2x padding
         const { tiles, tileX1, tileY1, cropBounds } = getTilesForRegion(
-            signCenter.x, signCenter.y, signSize.width, signSize.height
+            corrected.x, corrected.y, signSize.width, signSize.height, 1.2
         );
         
         const resp = await fetch(`${apiUrl}/crop-sign-tiles`, {

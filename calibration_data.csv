@@ -1,0 +1,20 @@
+# Crop offset calibration data
+# offset = measured pixels from crosshair to actual sign center
+#   positive = sign BELOW crosshair (crop too high, need to move DOWN)
+#   negative = sign ABOVE crosshair (crop too low, need to move UP)
+#
+# relH = heading - panoHeading (relative to camera direction)
+# pitch = vertical angle (negative = looking down)
+# tilt = camera tilt from metadata (90 = level, >90 = tilted down, <90 = tilted up)
+#
+panoId,relH,pitch,tilt,offset,notes
+fmk051SeuuwFo2H8oJt4xQ,45.76,-6.70,90.11,70,front-right of camera
+gy0loMoXLfK9D9-D80gfvQ,84.12,-9.59,90.24,30,front-right near 90deg
+RsWAICKjpulLrqm3ZmH9-Q,28.15,-4.49,90.13,40,front-right
+BbX0rHja0DhqByhK0m8Dog,-42.13,-1.43,90.13,-10,front-left of camera
+b6NIRBlEV10aJ2d2onNZzQ,-92.03,-1.78,90.34,-20,behind camera (correction applied)
+dD6uqzNFhZQEz0bG8xM3gw,14.16,-2.36,90.81,30,front near center
+tt90O41IIdakBnVyeRynTA,6.40,-4.30,85.65,-350,EXTREME TILT - camera tilted up 4.35deg
+RBN81k5SzmBMRgWruk0c6Q,-3.66,0.65,89.97,0,nearly centered - perfect
+RBN81k5SzmBMRgWruk0c6Q,-7.45,0.76,89.97,-7.5,front-left near center
+RBN81k5SzmBMRgWruk0c6Q,-88.25,-8.95,89.97,60,front-left near 90deg - outlier?

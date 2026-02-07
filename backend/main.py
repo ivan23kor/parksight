@@ -259,17 +259,29 @@ async def crop_sign_tiles(request: CropSignTilesRequest):
     x2 = min(stitch_width, request.crop_x + request.crop_width)
     y2 = min(stitch_height, request.crop_y + request.crop_height)
     
-    # Crop the sign region
     cropped = stitched.crop((x1, y1, x2, y2))
     
-    # Save cropped sign
+    # Draw debug crosshair at crop center (where we expect the sign to be)
+    crop_w, crop_h = cropped.size
+    cx, cy = crop_w // 2, crop_h // 2
+    draw = ImageDraw.Draw(cropped)
+    # Yellow crosshair
+    draw.line([(cx - 15, cy), (cx + 15, cy)], fill='yellow', width=2)
+    draw.line([(cx, cy - 15), (cx, cy + 15)], fill='yellow', width=2)
+    # Red horizontal lines at 10px intervals for measuring offset
+    for dy in range(-50, 51, 10):
+        if dy != 0:
+            y_line = cy + dy
+            if 0 <= y_line < crop_h:
+                draw.line([(cx - 8, y_line), (cx + 8, y_line)], fill='red', width=1)
+    
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{timestamp}_conf{request.confidence:.2f}.jpg"
     cropped.save(DETECTED_SIGNS_DIR / filename, quality=95)
     
     return {
-        "filename": filename, 
-        "width": x2 - x1, 
+        "filename": filename,
+        "width": x2 - x1,
         "height": y2 - y1,
         "tiles_fetched": len(request.tiles)
     }
