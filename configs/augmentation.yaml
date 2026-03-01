@@ -95,6 +95,24 @@ exp6_quality_v2:
   hsv_v: 0.4            # Brightness shift
   close_mosaic: 20      # Disable mosaic for last 20 epochs (fine-tuning)
 
+# Experiment 7: v3 Stabilized (reduced aug + lower LR)
+# UPDATED for restart (lowered LR + reduced mixup to stabilize training)
+exp7_stabilized_v3:
+  mosaic: 1.0           # Combine 4 images - forces multi-scale context
+  mixup: 0.08           # REDUCED from 0.15 - too much blending caused instability
+  copy_paste: 0.05      # REDUCED from 0.1
+  degrees: 8.0          # REDUCED from 10° - less aggressive rotation
+  translate: 0.1        # REDUCED from 0.2 - less translation variance
+  scale: 0.4            # REDUCED from 0.5 - less scale variance
+  shear: 2.0            # REDUCED from 3.0
+  perspective: 0.0001   # REDUCED from 0.0003
+  fliplr: 0.5           # Keep horizontal flip
+  flipud: 0.0           # No vertical flip
+  hsv_h: 0.01           # REDUCED from 0.015
+  hsv_s: 0.5            # REDUCED from 0.7
+  hsv_v: 0.3            # REDUCED from 0.4
+  close_mosaic: 20
+
 # =============================================================================
 # PARAMETER REFERENCE
 # =============================================================================
