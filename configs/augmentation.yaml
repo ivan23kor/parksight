@@ -77,6 +77,24 @@ exp5_full:
   fliplr: 0.5
   flipud: 0.0        # No vertical flip (signs have orientation)
 
+# Experiment 6: v2 Quality-focused (anti-FP + small sign detection)
+# SELECTED for v2 training
+exp6_quality_v2:
+  mosaic: 1.0           # Combine 4 images - forces multi-scale context
+  mixup: 0.15           # Blend images - reduces overconfident false positives
+  copy_paste: 0.1       # Copy-paste parking signs into other scenes
+  degrees: 10.0         # Rotation ±10°
+  translate: 0.2        # Translation ±20%
+  scale: 0.5            # Scale ±50% - critical for small sign detection
+  shear: 3.0            # Shear ±3°
+  perspective: 0.0003   # Slight perspective warp
+  fliplr: 0.5           # Horizontal flip
+  flipud: 0.0           # No vertical flip (signs have orientation)
+  hsv_h: 0.015          # Hue shift
+  hsv_s: 0.7            # Saturation shift
+  hsv_v: 0.4            # Brightness shift
+  close_mosaic: 20      # Disable mosaic for last 20 epochs (fine-tuning)
+
 # =============================================================================
 # PARAMETER REFERENCE
 # =============================================================================
