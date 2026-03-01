@@ -1,7 +1,7 @@
 {
-  "name": "free-parking",
+  "name": "parking-map",
   "version": "1.0.0",
-  "description": "Free Parking - Map & Upload detection UIs",
+  "description": "Parking Map - Map & Upload detection UIs",
   "scripts": {
     "build": "cd ui-upload && bun install && bun run build",
     "serve": "bunx --yes serve -l 8080",

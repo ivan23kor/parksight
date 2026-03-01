@@ -159,7 +159,7 @@ CREATE EXTENSION postgis;
 
 ### 2. Core Files Structure
 ```
-/home/ivan23kor/Code/free-parking/
+/home/ivan23kor/Code/parking-map/
 ├── index.html                    # Frontend map (extend)
 ├── js/
 │   ├── mapillary-client.js       # API integration
