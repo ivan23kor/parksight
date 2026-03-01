@@ -1,85 +1,67 @@
-# Map Overlay Visualization App
+# ParkSight
 
-An interactive web-based map visualization tool that allows users to overlay data and select/highlight streets within rectangular areas.
+AI-powered street-level parking detection system that combines Street View imagery with ML to map city parking zones and estimate capacity.
 
-## Features
+![ParkSight Demo](https://maas-log-prod.cn-wlcb.ufileos.com/anthropic/0b5f67b4-c22e-453a-b122-3adf9f9cc3ec/Screenshot%20from%202026-03-01%2008-59-46.png?UCloudPublicKey=TOKEN_e15ba47a-d098-4fbd-9afc-a0dcf0e4e621&Expires=1772383307&Signature=KM63klZftk1M/KL7C4xHtS6xB5Y=)
 
-### Core Functionality
-- Interactive map with multiple tile providers (OpenStreetMap, CartoDB)
-- Overlay support for GeoJSON and KML files
-- Customizable overlay styling (color, width, opacity)
-- Drawing tools (lines, polygons, markers)
+## What It Does
 
-### Street Selection
-- Rectangle area selection tool
-- Automatic fetching of street data from OpenStreetMap via Overpass API
-- Highlighting of streets within selected bounds
-- Customizable highlight colors and styles
-- Street information display on hover/click
+- **Area Selection**: Draw a rectangle on the map to select any city area
+- **Street Sampling**: Automatically fetches streets within your selection using OpenStreetMap
+- **Street View Coverage**: Checks which locations have Google Street View panoramas
+- **Sign Detection**: Uses YOLO11 ML model to detect parking signs in 360° panoramas
+- **Capacity Estimation**: Shows how many cars fit in each parking zone
 
-### Map Providers
-- OpenStreetMap
-- CartoDB Positron (light theme)
-- CartoDB Dark (dark theme)
+## Tech Stack
 
-## Getting Started
+**Frontend**
+- Leaflet (map rendering)
+- Turf.js (geospatial calculations)
+- Google Maps Street View API
 
-### Prerequisites
-- Python 3.x (for local server)
-- Modern web browser
+**Backend**
+- FastAPI (detection service)
+- YOLO11n (parking sign detection)
 
-### Installation
-1. Clone or download the project
-2. Navigate to the project directory
-3. Run the local server:
-   ```bash
-   npm run serve
-   ```
+## Quick Start
 
-### Usage
-1. Open your browser and go to `http://localhost:8080`
-2. Use the sidebar controls to interact with the map:
-   - Switch between map providers
-   - Load GeoJSON/KML files
-   - Draw custom overlays
-   - Select areas to highlight streets
+### Run the App
 
-## API Integration
-
-### Overpass API
-The app uses the Overpass API to fetch OpenStreetMap data. When you select a rectangular area, it queries for streets within that bounds.
-
-### Example Query
-```javascript
-// Streets query filters for these highway types:
-// - primary
-// - secondary
-// - tertiary
-// - residential
-// - service
-// - unclassified
+```bash
+# Serve on http://localhost:8080
+bun run serve
 ```
 
-## File Structure
-```
-map-overlay-app/
-├── src/
-│   └── index.html      # Main application file
-├── dist/               # Distribution folder
-├── docs/               # Documentation
-├── package.json        # Project configuration
-└── README.md          # This file
+### Run the Detection Backend
+
+```bash
+# Install dependencies
+uv venv
+uv pip install -r backend/requirements.txt
+
+# Start on http://localhost:8000
+.venv/bin/python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ```
 
-## Dependencies
-- Leaflet.js - Interactive maps
-- Turf.js - Geospatial analysis (included via CDN)
+## How to Use
 
-## Browser Compatibility
-- Chrome 60+
-- Firefox 55+
-- Safari 12+
-- Edge 79+
+1. Open http://localhost:8080
+2. Click "Map & Street View Detection"
+3. Draw a rectangle on the map (or use Ctrl+drag)
+4. The app will:
+   - Fetch streets in the area
+   - Check Street View coverage
+   - Show purple dots for available panoramas
+5. Click any dot to view Street View and detect parking signs
+
+## Project Status
+
+- ✅ Map-based area selection
+- ✅ Street View integration
+- ✅ YOLO11 parking sign detection
+- ✅ Bounding box visualization
+- ⏳ Capacity calculation (in progress)
 
 ## License
-MIT License
+
+MIT
