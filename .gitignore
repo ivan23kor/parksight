@@ -37,3 +37,4 @@ detection_images/
 
 # Cropped detected parking signs
 detected_signs/
+*.png\nplot_*.py
