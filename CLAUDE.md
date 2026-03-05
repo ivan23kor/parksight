@@ -5,7 +5,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 ## Repo at a glance
 This repo mixes two related pieces:
 - **Map + street imagery viewer (static web app):** `index.html` (Leaflet + Turf + Google Maps JS API) with modular JS in `js/` and config in `config.js`.
-- **Parking-sign ML training artifacts:** dataset build script (`datasets/build_unified_dataset.py`), augmentation config (`configs/augmentation.yaml`), and a Kaggle-style training notebook setup under `notebooks/`.
+- **Parking-sign ML training:** dataset build script (`datasets/build_unified_dataset.py`), and Kaggle training notebooks under `notebooks/`.
 
 ## Common commands
 ### Run the map app locally
@@ -42,18 +42,12 @@ Note: `dist/` is gitignored (see `.gitignore`).
 
 This script expects the source datasets to exist under `datasets/` (which is gitignored and typically local-only).
 
-### Run the training notebook headlessly (Docker)
-`notebooks/` is set up to mimic Kaggle paths (`/kaggle/input`, `/kaggle/working`) using the Ultralytics CPU image.
+### Train on Kaggle
+1. Upload dataset to kaggle.com/datasets
+2. Import notebook from `notebooks/`
+3. Enable GPU, run
 
-- From repo root, run the quick “does training boot?” check:
-  ```bash
-  docker compose -f notebooks/docker-compose.yml run --rm test
-  ```
-
-- Execute the full training notebook via `nbconvert`:
-  ```bash
-  docker compose -f notebooks/docker-compose.yml run --rm train
-  ```
+See `notebooks/KAGGLE_RUN_CHECKLIST.md` for details.
 
 ## Architecture (big picture)
 ### 1) Web app (`index.html` + `js/`)
@@ -109,21 +103,15 @@ uv venv && uv pip install --python .venv/bin/python -r backend/requirements.txt
   - Request: `{"image_url": "...", "confidence": 0.15}`
   - Response: `{"detections": [{"x1", "y1", "x2", "y2", "confidence", "class_name"}], "inference_time_ms": ...}`
 
-**Model:** `notebooks/output/test_run/train/weights/best.pt` (YOLO11n, 1 class: `parking_sign`)
+**Model:** Download from Kaggle after training → place in `backend/models/best.pt` (YOLO11m, 1 class: `parking_sign`)
 
-### 3) ML / training workflow (`datasets/`, `configs/`, `notebooks/`)
+### 3) ML / training workflow (`datasets/`, `notebooks/`)
 Data flow:
 - Raw datasets under `datasets/` → `datasets/build_unified_dataset.py` converts/resizes into a **single-class** YOLO dataset (512x512) and writes `data.yaml`.
-- Training is documented in `notebooks/README.md` and implemented in `notebooks/parking_sign_training.ipynb`.
-- `configs/augmentation.yaml` records the augmentation “experiments” (Ultralytics runtime augmentation params + notes about pre-applied Roboflow aug).
-
-Docker flow:
-- `notebooks/Dockerfile` uses `ultralytics/ultralytics:latest-cpu` + installs Jupyter tooling.
-- `notebooks/docker-compose.yml` mounts:
-  - `datasets/parking-sign-detection-coco-dataset` → `/kaggle/input/parking-sign-detection-coco-dataset` (read-only)
-  - `notebooks/output` → `/kaggle/working/output`
+- Training runs on Kaggle using notebooks in `notebooks/`. See `notebooks/EXPERIMENT_STATUS.md` for experiment results.
 
 ## Sharp edges / mismatches to be aware of
 - `package.json` references `src/index.html`, but this repo's source HTML is currently `index.html` at the repo root (no `src/` directory). The `npm run build` script may need updating.
 - The docs in `README.md` / `docs/api-reference.md` describe a broader "overlay app" UI than what's currently present in `index.html` (use `index.html` as the source of truth).
 - Detection requires the backend to be running (`http://localhost:8000`). If unavailable, UI gracefully degrades to showing just the 360° panorama.
+- Training is done on Kaggle, not locally. There is no local Docker setup.

@@ -1,97 +1,47 @@
 # Parking Sign Detection Training
 
-YOLO12 parking sign detector trained on Kaggle with documented augmentation experiments.
+YOLO11 parking sign detector trained on Kaggle.
 
-**Model:** YOLO12n (attention-centric architecture, 40.6 mAP on COCO)
+**Model:** YOLO11m (medium)
 
 ## Dataset
 
 **Unified Parking Sign Detection Dataset** - `parking-sign-detection-coco-dataset.zip`
 
 - **3,213 images** with 1 class (`parking_sign`)
-- **Combined from:**
-  - parking-sign-coco (Roboflow): 1,300 images, 512x512
-  - sf-parking-signs (Figure Eight): 1,913 images, resized from 1050x1050
 - **Train/Val/Test split:** 2,570 / 321 / 322 (80/10/10)
 - **Resolution:** 512x512 (standardized)
-- **Format:** YOLOv8 (ready to train)
+- **Format:** YOLO
 
-## Quick Start
+## Quick Start (Kaggle)
 
-### 1. Upload Dataset to Kaggle
+1. Upload dataset to kaggle.com/datasets
+2. Import notebook `06_parking_sign_training_highres.ipynb` or `04_parking_sign_training_controlled_negatives.ipynb`
+3. Add dataset, enable GPU (T4), run
 
-Manual upload at kaggle.com/datasets/new:
-- Upload `datasets/parking-sign-detection-coco-dataset.zip`
-- Title: "Unified Parking Sign Detection Dataset"
-- Make public
+See `KAGGLE_RUN_CHECKLIST.md` for detailed run instructions.
 
-### 2. Create Notebook on Kaggle
+## Experiment Status
 
-1. Go to kaggle.com/code
-2. New Notebook → Import `parking_sign_training.ipynb`
-3. Add your dataset: "+ Add Data" → search "parking-sign-detection-coco-dataset"
-4. Enable GPU: Settings → Accelerator → GPU T4
-5. Run all cells
-
-### 3. Download Trained Model
-
-After training, download from Kaggle:
-- `parking_sign_detector.pt` - PyTorch weights
-- `parking_sign_detector.onnx` - ONNX format
-
-## Augmentation Experiments
-
-| Experiment | Description | Key Augmentations |
-|------------|-------------|-------------------|
-| exp1_baseline | Minimal | mosaic=0.0 |
-| exp2_mosaic | Mosaic | mosaic=1.0, scale=0.5 |
-| exp3_hsv | Color | hsv_h/s/v shifts |
-| exp4_geometric | Transforms | rotation, shear, perspective |
-| exp5_full | All combined | Everything above |
-
-### Pre-applied (in dataset)
-- Roboflow subset: rotation ±15°, brightness ±15%, blur 0-2.5px
-- SF subset: raw images (no augmentation)
-
-## Expected Results
-
-Training time: ~2-3 hours total for 5 experiments on Kaggle T4
-
-Target metrics:
-- mAP50: >0.90
-- mAP50-95: >0.70
+See `EXPERIMENT_STATUS.md` for current experiment results.
 
 ## Files
 
 ```
 notebooks/
-├── parking_sign_training.ipynb  # Main training notebook
-└── README.md                    # This file
-
-configs/
-└── augmentation.yaml            # Augmentation parameters
-
-datasets/
-├── build_unified_dataset.py     # Dataset building script
-├── parking-sign-detection-coco-dataset.zip    # Kaggle upload (296MB)
-└── parking-sign-detection-coco-dataset/       # Built dataset
-    ├── data.yaml                # YOLO12 config
-    ├── train/                   # 2,570 images
-    ├── valid/                   # 321 images
-    └── test/                    # 322 images
+├── 01_parking_sign_training.ipynb                      # Experiment A
+├── 02_parking_sign_training_baseline.ipynb             # Experiment B (baseline)
+├── 03_parking_sign_training_fullaug.ipynb              # Experiment B variant
+├── 04_parking_sign_training_controlled_negatives.ipynb # Experiment C (pending)
+├── 05_parking_sign_training_large_model.ipynb          # Experiment D (completed)
+├── 06_parking_sign_training_highres.ipynb              # Experiment E (pending)
+├── EXPERIMENT_STATUS.md                                 # Experiment tracking
+└── KAGGLE_RUN_CHECKLIST.md                              # Run instructions
 ```
 
-## Usage
+## Baseline (Version B)
 
-```python
-from ultralytics import YOLO
-
-model = YOLO("parking_sign_detector.pt")
-results = model("street_image.jpg")
-results[0].show()
-```
-
-## Data Sources
-
-- Roboflow parking-sign dataset (CC BY 4.0)
-- Figure Eight SF Parking Signs dataset
+- mAP50-95: 0.758
+- mAP50: 0.989
+- Precision: 0.980
+- Recall: 0.962
