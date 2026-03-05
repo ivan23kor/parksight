@@ -1,0 +1,168 @@
+---------------------------------------------------------------------------
+ValueError                                Traceback (most recent call last)
+/tmp/ipykernel_24/426488541.py in <cell line: 0>()
+      1 from pathlib import Path
+----> 2 from ultralytics import YOLO
+      3 import pandas as pd
+      4 import matplotlib.pyplot as plt
+      5 import shutil
+
+/usr/lib/python3.12/importlib/_bootstrap.py in _handle_fromlist(module, fromlist, import_, recursive)
+
+/usr/local/lib/python3.12/dist-packages/ultralytics/__init__.py in __getattr__(name)
+     36     """Lazy-import model classes on first access."""
+     37     if name in MODELS:
+---> 38         return getattr(importlib.import_module("ultralytics.models"), name)
+     39     raise AttributeError(f"module {__name__} has no attribute {name}")
+     40 
+
+/usr/lib/python3.12/importlib/__init__.py in import_module(name, package)
+     88                 break
+     89             level += 1
+---> 90     return _bootstrap._gcd_import(name[level:], package, level)
+     91 
+     92 
+
+/usr/local/lib/python3.12/dist-packages/ultralytics/models/__init__.py in <module>
+      4 from .nas import NAS
+      5 from .rtdetr import RTDETR
+----> 6 from .sam import SAM
+      7 from .yolo import YOLO, YOLOE, YOLOWorld
+      8 
+
+/usr/local/lib/python3.12/dist-packages/ultralytics/models/sam/__init__.py in <module>
+      1 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+      2 
+----> 3 from .model import SAM
+      4 from .predict import (
+      5     Predictor,
+
+/usr/local/lib/python3.12/dist-packages/ultralytics/models/sam/model.py in <module>
+     22 from ultralytics.utils.torch_utils import model_info
+     23 
+---> 24 from .predict import Predictor, SAM2Predictor, SAM3Predictor
+     25 
+     26 
+
+/usr/local/lib/python3.12/dist-packages/ultralytics/models/sam/predict.py in <module>
+     38     uncrop_masks,
+     39 )
+---> 40 from .sam3.geometry_encoders import Prompt
+     41 
+     42 
+
+/usr/local/lib/python3.12/dist-packages/ultralytics/models/sam/sam3/geometry_encoders.py in <module>
+      5 import torch
+      6 import torch.nn as nn
+----> 7 import torchvision
+      8 
+      9 from ultralytics.nn.modules.utils import _get_clones
+
+/usr/local/lib/python3.12/dist-packages/torchvision/__init__.py in <module>
+      8 # .extensions) before entering _meta_registrations.
+      9 from .extension import _HAS_OPS  # usort:skip
+---> 10 from torchvision import _meta_registrations, datasets, io, models, ops, transforms, utils  # usort:skip
+     11 
+     12 try:
+
+/usr/local/lib/python3.12/dist-packages/torchvision/models/__init__.py in <module>
+      1 from .alexnet import *
+----> 2 from .convnext import *
+      3 from .densenet import *
+      4 from .efficientnet import *
+      5 from .googlenet import *
+
+/usr/local/lib/python3.12/dist-packages/torchvision/models/convnext.py in <module>
+      7 from torch.nn import functional as F
+      8 
+----> 9 from ..ops.misc import Conv2dNormActivation, Permute
+     10 from ..ops.stochastic_depth import StochasticDepth
+     11 from ..transforms._presets import ImageClassification
+
+/usr/local/lib/python3.12/dist-packages/torchvision/ops/__init__.py in <module>
+     21 from .giou_loss import generalized_box_iou_loss
+     22 from .misc import Conv2dNormActivation, Conv3dNormActivation, FrozenBatchNorm2d, MLP, Permute, SqueezeExcitation
+---> 23 from .poolers import MultiScaleRoIAlign
+     24 from .ps_roi_align import ps_roi_align, PSRoIAlign
+     25 from .ps_roi_pool import ps_roi_pool, PSRoIPool
+
+/usr/local/lib/python3.12/dist-packages/torchvision/ops/poolers.py in <module>
+      8 
+      9 from ..utils import _log_api_usage_once
+---> 10 from .roi_align import roi_align
+     11 
+     12 
+
+/usr/local/lib/python3.12/dist-packages/torchvision/ops/roi_align.py in <module>
+      5 import torch.fx
+      6 from torch import nn, Tensor
+----> 7 from torch._dynamo.utils import is_compile_supported
+      8 from torch.jit.annotations import BroadcastingList2
+      9 from torch.nn.modules.utils import _pair
+
+/usr/local/lib/python3.12/dist-packages/torch/_dynamo/__init__.py in <module>
+     11 import torch
+     12 
+---> 13 from . import (
+     14     aot_compile,
+     15     config,
+
+/usr/local/lib/python3.12/dist-packages/torch/_dynamo/aot_compile.py in <module>
+     13 from torch._dynamo.precompile_context import PrecompileContext
+     14 
+---> 15 from . import convert_frame
+     16 from .hooks import Hooks
+     17 
+
+/usr/local/lib/python3.12/dist-packages/torch/_dynamo/convert_frame.py in <module>
+     55 from torch._dynamo.callback import CallbackTrigger
+     56 from torch._dynamo.distributed import get_compile_pg
+---> 57 from torch._dynamo.symbolic_convert import TensorifyState
+     58 from torch._guards import compile_context, CompileContext, CompileId, tracing
+     59 from torch._logging import structured
+
+/usr/local/lib/python3.12/dist-packages/torch/_dynamo/symbolic_convert.py in <module>
+     51 import torch
+     52 import torch._logging
+---> 53 from torch._dynamo.exc import ObservedException, TensorifyScalarRestartAnalysis
+     54 from torch._guards import tracing, TracingContext
+     55 from torch._logging.structured import dump_file
+
+/usr/local/lib/python3.12/dist-packages/torch/_dynamo/exc.py in <module>
+     43 
+     44 from . import config
+---> 45 from .utils import counters
+     46 
+     47 
+
+/usr/local/lib/python3.12/dist-packages/torch/_dynamo/utils.py in <module>
+    135             np.fft,
+    136             np.linalg,
+--> 137             np.random,
+    138         )
+    139 
+
+/usr/local/lib/python3.12/dist-packages/numpy/__init__.py in __getattr__(attr)
+    335 
+    336     def __dir__():
+--> 337         public_symbols = globals().keys() | {'testing'}
+    338         public_symbols -= {
+    339             "core", "matrixlib",
+
+/usr/local/lib/python3.12/dist-packages/numpy/random/__init__.py in <module>
+    178 
+    179 # add these for module-freeze analysis (like PyInstaller)
+--> 180 from . import _pickle
+    181 from . import _common
+    182 from . import _bounded_integers
+
+/usr/local/lib/python3.12/dist-packages/numpy/random/_pickle.py in <module>
+----> 1 from .mtrand import RandomState
+      2 from ._philox import Philox
+      3 from ._pcg64 import PCG64, PCG64DXSM
+      4 from ._sfc64 import SFC64
+      5 
+
+numpy/random/mtrand.pyx in init numpy.random.mtrand()
+
+ValueError: numpy.dtype size changed, may indicate binary incompatibility. Expected 96 from C header, got 88 from PyObject
