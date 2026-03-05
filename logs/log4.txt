@@ -1,0 +1,35 @@
+11.2s	1	␛[31mERROR: Could not install packages due to an OSError: [Errno 2] No such file or directory: '/opt/conda/lib/python3.10/site-packages/numpy-1.26.2.dist-info/METADATA'
+11.2s	2	␛[0m␛[31m
+14.1s	3	␛[0m␛[31mERROR: Could not install packages due to an OSError: [Errno 2] No such file or directory: '/opt/conda/lib/python3.10/site-packages/numpy-1.26.2.dist-info/METADATA'
+14.1s	4	␛[0m␛[31m
+14.9s	5	Traceback (most recent call last):
+14.9s	6	  File "<string>", line 1, in <module>
+14.9s	7	  File "/opt/conda/lib/python3.10/site-packages/papermill/execute.py", line 128, in execute_notebook
+14.9s	8	    raise_for_execution_errors(nb, output_path)
+14.9s	9	  File "/opt/conda/lib/python3.10/site-packages/papermill/execute.py", line 232, in raise_for_execution_errors
+14.9s	10	    raise error
+14.9s	11	papermill.exceptions.PapermillExecutionError: 
+14.9s	12	---------------------------------------------------------------------------
+14.9s	13	Exception encountered at "In [2]":
+14.9s	14	---------------------------------------------------------------------------
+14.9s	15	ModuleNotFoundError                       Traceback (most recent call last)
+14.9s	16	Cell In[2], line 2
+14.9s	17	      1 from pathlib import Path
+14.9s	18	----> 2 from ultralytics import YOLO
+14.9s	19	      3 import pandas as pd
+14.9s	20	      4 import matplotlib.pyplot as plt
+14.9s	21	
+14.9s	22	ModuleNotFoundError: No module named 'ultralytics'
+14.9s	23	
+16.5s	24	/opt/conda/lib/python3.10/site-packages/traitlets/traitlets.py:2930: FutureWarning: --Exporter.preprocessors=["remove_papermill_header.RemovePapermillHeader"] for containers is deprecated in traitlets 5.0. You can pass `--Exporter.preprocessors item` ... multiple times to add items to a list.
+16.5s	25	  warn(
+16.5s	26	[NbConvertApp] WARNING | Config option `kernel_spec_manager_class` not recognized by `NbConvertApp`.
+16.5s	27	[NbConvertApp] Converting notebook __notebook__.ipynb to notebook
+16.9s	28	[NbConvertApp] Writing 27180 bytes to __notebook__.ipynb
+18.2s	29	/opt/conda/lib/python3.10/site-packages/traitlets/traitlets.py:2930: FutureWarning: --Exporter.preprocessors=["nbconvert.preprocessors.ExtractOutputPreprocessor"] for containers is deprecated in traitlets 5.0. You can pass `--Exporter.preprocessors item` ... multiple times to add items to a list.
+18.2s	30	  warn(
+18.2s	31	[NbConvertApp] WARNING | Config option `kernel_spec_manager_class` not recognized by `NbConvertApp`.
+18.3s	32	[NbConvertApp] Converting notebook __notebook__.ipynb to html
+19.0s	33	[NbConvertApp] Writing 342155 bytes to __results__.html
+19.4s	34	␛[0m
+
