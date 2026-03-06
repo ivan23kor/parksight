@@ -583,6 +583,128 @@ async def detect_file(file: UploadFile = File(...), confidence: float = 0.15):
     )
 
 
+@app.post("/detect-sahi", response_model=SahiResponse)
+async def detect_sahi(request: SahiRequest):
+    """
+    Slicing Aided Hyper Inference (SAHI) for parking sign detection.
+
+    Slices the panorama view into overlapping higher-zoom windows,
+    runs YOLO on each, converts detections to angular coordinates,
+    and merges with NMS.
+    """
+    # Calculate slice headings to cover the requested FOV
+    step = request.slice_fov * (1 - request.overlap)
+    num_slices = max(1, math.ceil(request.fov / step))
+    # Center the slices around the requested heading
+    total_span = (num_slices - 1) * step if num_slices > 1 else 0
+    start_heading = request.heading - total_span / 2
+
+    slices = []
+    for i in range(num_slices):
+        slice_heading = (start_heading + i * step) % 360
+        slices.append(slice_heading)
+
+    print(f"SAHI: {num_slices} slices, FOV={request.slice_fov}°, "
+          f"step={step:.1f}°, headings={[f'{h:.1f}' for h in slices]}")
+
+    # Fetch all slice images in parallel
+    async def fetch_slice(client: httpx.AsyncClient, heading: float) -> tuple[float, bytes | None]:
+        url = build_streetview_url(
+            request.pano_id, heading, request.pitch, request.slice_fov,
+            request.img_width, request.img_height, request.api_key
+        )
+        try:
+            resp = await client.get(url, timeout=10.0)
+            resp.raise_for_status()
+            return heading, resp.content
+        except httpx.HTTPError as e:
+            print(f"SAHI: Failed to fetch slice at heading {heading:.1f}°: {e}")
+            return heading, None
+
+    async with httpx.AsyncClient() as client:
+        tasks = [fetch_slice(client, h) for h in slices]
+        results = await asyncio.gather(*tasks)
+
+    # Run inference on each slice and collect angular detections
+    all_angular_dets: list[AngularDetection] = []
+    total_inference_ms = 0.0
+
+    for slice_heading, image_bytes in results:
+        if image_bytes is None:
+            continue
+
+        try:
+            image = Image.open(io.BytesIO(image_bytes))
+            img_w, img_h = image.size
+        except Exception as e:
+            print(f"SAHI: Failed to load slice image at heading {slice_heading:.1f}°: {e}")
+            continue
+
+        start_time = time.time()
+        yolo_results = model.predict(image, conf=request.confidence, verbose=False)
+        total_inference_ms += (time.time() - start_time) * 1000
+
+        for r in yolo_results:
+            if r.boxes is None:
+                continue
+            for box in r.boxes:
+                x1, y1, x2, y2 = map(float, box.xyxy[0].tolist())
+                conf = float(box.conf[0])
+                cls_name = model.names[int(box.cls[0])]
+
+                # Detection center and size in pixels
+                cx = (x1 + x2) / 2
+                cy = (y1 + y2) / 2
+                det_w = x2 - x1
+                det_h = y2 - y1
+
+                # Convert center to angular coords
+                center_heading, center_pitch = pixel_to_angular(
+                    cx, cy, slice_heading, request.pitch,
+                    request.slice_fov, img_w, img_h
+                )
+
+                # Convert corners to get angular dimensions
+                tl_h, tl_p = pixel_to_angular(x1, y1, slice_heading, request.pitch, request.slice_fov, img_w, img_h)
+                tr_h, tr_p = pixel_to_angular(x2, y1, slice_heading, request.pitch, request.slice_fov, img_w, img_h)
+                bl_h, bl_p = pixel_to_angular(x1, y2, slice_heading, request.pitch, request.slice_fov, img_w, img_h)
+                br_h, br_p = pixel_to_angular(x2, y2, slice_heading, request.pitch, request.slice_fov, img_w, img_h)
+
+                # Angular width: average of top and bottom edge spans
+                top_w = tr_h - tl_h
+                if top_w > 180: top_w -= 360
+                if top_w < -180: top_w += 360
+                bot_w = br_h - bl_h
+                if bot_w > 180: bot_w -= 360
+                if bot_w < -180: bot_w += 360
+                ang_w = abs((top_w + bot_w) / 2)
+
+                # Angular height: average of left and right edge spans
+                ang_h = abs(((tl_p - bl_p) + (tr_p - br_p)) / 2)
+
+                all_angular_dets.append(AngularDetection(
+                    heading=center_heading,
+                    pitch=center_pitch,
+                    angular_width=ang_w,
+                    angular_height=ang_h,
+                    confidence=conf,
+                    class_name=cls_name,
+                ))
+
+    print(f"SAHI: {len(all_angular_dets)} raw detections before NMS")
+
+    # NMS to merge overlapping detections from adjacent slices
+    merged = nms_angular(all_angular_dets, request.nms_iou_threshold)
+
+    print(f"SAHI: {len(merged)} detections after NMS")
+
+    return SahiResponse(
+        detections=merged,
+        total_inference_time_ms=round(total_inference_ms, 1),
+        slices_count=num_slices,
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
