@@ -2,7 +2,9 @@
 Parking Sign Detection API.
 FastAPI backend for YOLO11 inference on Street View images.
 """
+import asyncio
 import io
+import math
 import re
 import time
 from datetime import datetime
@@ -77,6 +79,137 @@ class DetectionResponse(BaseModel):
 class SaveSignResponse(BaseModel):
     filename: str
     size: int
+
+
+class AngularDetection(BaseModel):
+    heading: float
+    pitch: float
+    angular_width: float
+    angular_height: float
+    confidence: float
+    class_name: str
+
+
+class SahiRequest(BaseModel):
+    pano_id: str
+    heading: float
+    pitch: float = 0.0
+    fov: float = 90.0
+    slice_fov: float = 45.0
+    overlap: float = 0.3
+    confidence: float = 0.15
+    nms_iou_threshold: float = 0.5
+    api_key: str
+    img_width: int = 640
+    img_height: int = 640
+
+
+class SahiResponse(BaseModel):
+    detections: list[AngularDetection]
+    total_inference_time_ms: float
+    slices_count: int
+
+
+def pixel_to_angular(x: float, y: float, pov_heading: float, pov_pitch: float,
+                     h_fov: float, img_w: int, img_h: int) -> tuple[float, float]:
+    """
+    Convert pixel coords in a gnomonic (perspective) image to world heading/pitch.
+    Uses the same PanoMarker 3D basis-vector math as the frontend's screenToAngular().
+    Coordinate system: x=East, y=North, z=Up.
+    """
+    h0 = math.radians(pov_heading)
+    p0 = math.radians(pov_pitch)
+    cos_p0 = math.cos(p0)
+    sin_p0 = math.sin(p0)
+    cos_h0 = math.cos(h0)
+    sin_h0 = math.sin(h0)
+
+    # Focal length (matches directionToScreen / PanoMarker)
+    f = (img_w / 2) / math.tan(math.radians(h_fov / 2))
+
+    # Pixel offsets from center (Y flipped)
+    du = x - img_w / 2
+    dv = img_h / 2 - y
+
+    # POV center direction in 3D (x=East, y=North, z=Up)
+    x0 = f * cos_p0 * sin_h0
+    y0 = f * cos_p0 * cos_h0
+    z0 = f * sin_p0
+
+    # Image plane basis vectors (from PanoMarker)
+    ux, uy, uz = cos_h0, -sin_h0, 0.0
+    vx, vy, vz = -sin_p0 * sin_h0, -sin_p0 * cos_h0, cos_p0
+
+    # 3D point on the image plane
+    px = x0 + du * ux + dv * vx
+    py = y0 + du * uy + dv * vy
+    pz = z0 + du * uz + dv * vz
+
+    # Convert to heading/pitch
+    r = math.sqrt(px * px + py * py + pz * pz)
+    world_heading = math.degrees(math.atan2(px, py)) % 360
+    world_pitch = math.degrees(math.asin(max(-1.0, min(1.0, pz / r))))
+
+    return world_heading, world_pitch
+
+
+def angular_iou(a: AngularDetection, b: AngularDetection) -> float:
+    """Compute IoU between two detections in angular (heading x pitch) space."""
+    # Box edges
+    a_left = a.heading - a.angular_width / 2
+    a_right = a.heading + a.angular_width / 2
+    a_top = a.pitch + a.angular_height / 2
+    a_bottom = a.pitch - a.angular_height / 2
+
+    b_left = b.heading - b.angular_width / 2
+    b_right = b.heading + b.angular_width / 2
+    b_top = b.pitch + b.angular_height / 2
+    b_bottom = b.pitch - b.angular_height / 2
+
+    # Handle heading wrap-around: shift b relative to a
+    heading_diff = b.heading - a.heading
+    if heading_diff > 180:
+        heading_diff -= 360
+    elif heading_diff < -180:
+        heading_diff += 360
+    # Re-center b on a's frame
+    b_left_adj = a.heading + heading_diff - b.angular_width / 2
+    b_right_adj = a.heading + heading_diff + b.angular_width / 2
+
+    inter_left = max(a_left, b_left_adj)
+    inter_right = min(a_right, b_right_adj)
+    inter_bottom = max(a_bottom, b_bottom)
+    inter_top = min(a_top, b_top)
+
+    inter_w = max(0, inter_right - inter_left)
+    inter_h = max(0, inter_top - inter_bottom)
+    inter_area = inter_w * inter_h
+
+    a_area = a.angular_width * a.angular_height
+    b_area = b.angular_width * b.angular_height
+    union_area = a_area + b_area - inter_area
+
+    if union_area <= 0:
+        return 0.0
+    return inter_area / union_area
+
+
+def nms_angular(detections: list[AngularDetection], iou_threshold: float = 0.5) -> list[AngularDetection]:
+    """Non-Maximum Suppression in angular space."""
+    if not detections:
+        return []
+    # Sort by confidence descending
+    sorted_dets = sorted(detections, key=lambda d: d.confidence, reverse=True)
+    keep = []
+    for det in sorted_dets:
+        suppressed = False
+        for kept in keep:
+            if angular_iou(det, kept) > iou_threshold:
+                suppressed = True
+                break
+        if not suppressed:
+            keep.append(det)
+    return keep
 
 
 def parse_streetview_url(url: str) -> dict | None:
