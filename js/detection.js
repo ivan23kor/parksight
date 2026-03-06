@@ -439,63 +439,32 @@ let markedPoints = [];
 let cachedPanoMetadata = null;
 
 /**
- * Apply empirical correction to tile pixel coordinates.
- * Based on analysis of measured offsets, the correction depends on:
- * - Relative heading from camera forward (cos term)
- * - Pitch (linear term)
- * - Tilt deviation from level (scales the correction)
- * 
- * Model: y_offset = (A * cos(relH + 180) + B * pitch + C) * tiltFactor
- * From 5-point calibration at tilt=91.39°: A=86.23, B=-8.12, C=-49.82
- * 
- * IMPORTANT: Only calibrated for signs BEHIND the camera (|relH| > 90°).
- * For signs in front of camera, no correction is applied.
+ * Convert heading/pitch to tile pixel coordinates with tilt correction.
+ *
+ * Google's stabilized tiles are equirectangular in the camera's local frame.
+ * Heading maps directly (world heading - panoHeading), but pitch is offset
+ * by the camera's tilt. The offset depends on relative heading:
+ *
+ *   - Looking forward  (relH=0°):   tilt shifts pitch by +tiltOffset
+ *   - Looking sideways  (relH=90°):  no pitch shift (tilt becomes heading shift)
+ *   - Looking backward (relH=180°): tilt shifts pitch by -tiltOffset
+ *
+ * Formula: tilePitch = worldPitch + (tilt - 90) * cos(relativeHeading)
  */
-function computeYCorrection(heading, pitch, panoHeading, tilt) {
+function headingPitchToPixelCorrected(heading, pitch, imageWidth, imageHeight, panoHeading = 0, tilt = 90) {
+    let h = (heading - panoHeading + 180 + 360) % 360;
+    const x = (h / 360) * imageWidth;
+
+    // Tilt correction: only affects Y, scales with cos(relativeHeading)
+    const tiltOffset = tilt - 90;  // degrees, positive = camera looks down
     let relH = heading - panoHeading;
     if (relH < -180) relH += 360;
     if (relH > 180) relH -= 360;
-    
-    // Only apply correction for signs behind the camera (|relH| > 90°)
-    if (Math.abs(relH) < 90) {
-        return 0;
-    }
-    
-    // Scale correction by how much tilt differs from 90° (level)
-    // Calibration was at tilt=91.39° (offset of 1.39° from level)
-    const CALIBRATION_TILT_OFFSET = 1.39;
-    const tiltFactor = (tilt - 90) / CALIBRATION_TILT_OFFSET;
-    
-    // Skip if tilt is very close to level
-    if (Math.abs(tiltFactor) < 0.1) {
-        return 0;
-    }
-    
-    // Empirical coefficients from calibration data (tilt=91.39°)
-    const A = 86.23;
-    const B = -8.12;
-    const C = -49.82;
-    
-    const cosTerm = Math.cos((relH + 180) * Math.PI / 180);
-    const baseOffset = A * cosTerm + B * pitch + C;
-    
-    return baseOffset * tiltFactor;
-}
 
-/**
- * Convert heading/pitch to CORRECTED pixel coordinates for tile cropping.
- * Applies empirical correction for Google's tile stabilization.
- */
-function headingPitchToPixelCorrected(heading, pitch, imageWidth, imageHeight, panoHeading = 0, tilt = 90) {
-    // Base equirectangular mapping
-    let h = (heading - panoHeading + 180 + 360) % 360;
-    const x = (h / 360) * imageWidth;
+    const yCorrection = tiltOffset * Math.cos(relH * Math.PI / 180) * (imageHeight / 180);
     const yBase = ((90 - pitch) / 180) * imageHeight;
-    
-    // Apply empirical Y correction (only for behind-camera signs with tilted panos)
-    const yCorrection = computeYCorrection(heading, pitch, panoHeading, tilt);
-    const y = yBase - yCorrection;  // Subtract because offset was "crop below actual"
-    
+    const y = yBase + yCorrection;
+
     return { x, y, yCorrection };
 }
 
