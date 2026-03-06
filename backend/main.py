@@ -58,6 +58,7 @@ class CropSignTilesRequest(BaseModel):
     confidence: float = 0.0
     api_key: str
     session_token: str
+    debug: bool = False
 
 
 class Detection(BaseModel):
@@ -394,19 +395,20 @@ async def crop_sign_tiles(request: CropSignTilesRequest):
     
     cropped = stitched.crop((x1, y1, x2, y2))
     
-    # Draw debug crosshair at crop center (where we expect the sign to be)
-    crop_w, crop_h = cropped.size
-    cx, cy = crop_w // 2, crop_h // 2
-    draw = ImageDraw.Draw(cropped)
-    # Yellow crosshair
-    draw.line([(cx - 15, cy), (cx + 15, cy)], fill='yellow', width=2)
-    draw.line([(cx, cy - 15), (cx, cy + 15)], fill='yellow', width=2)
-    # Red horizontal lines at 10px intervals for measuring offset
-    for dy in range(-50, 51, 10):
-        if dy != 0:
-            y_line = cy + dy
-            if 0 <= y_line < crop_h:
-                draw.line([(cx - 8, y_line), (cx + 8, y_line)], fill='red', width=1)
+    if request.debug:
+        # Draw debug crosshair at crop center (where we expect the sign to be)
+        crop_w, crop_h = cropped.size
+        cx, cy = crop_w // 2, crop_h // 2
+        draw = ImageDraw.Draw(cropped)
+        # Yellow crosshair
+        draw.line([(cx - 15, cy), (cx + 15, cy)], fill='yellow', width=2)
+        draw.line([(cx, cy - 15), (cx, cy + 15)], fill='yellow', width=2)
+        # Red horizontal lines at 10px intervals for measuring offset
+        for dy in range(-50, 51, 10):
+            if dy != 0:
+                y_line = cy + dy
+                if 0 <= y_line < crop_h:
+                    draw.line([(cx - 8, y_line), (cx + 8, y_line)], fill='red', width=1)
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"{timestamp}_conf{request.confidence:.2f}.jpg"
