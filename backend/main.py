@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from ultralytics import YOLO
 
 # Paths
-MODEL_PATH = Path(__file__).parent.parent / "notebooks/output/test_run/train/weights/best.pt"
+MODEL_PATH = Path(__file__).parent / "models" / "best.pt"
 DETECTED_SIGNS_DIR = Path(__file__).parent.parent / "detected_signs"
 DETECTED_SIGNS_DIR.mkdir(exist_ok=True)
 
