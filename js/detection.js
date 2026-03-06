@@ -791,9 +791,60 @@ function clearDetections() {
 }
 
 /**
- * Run detection and display results on panorama.
+ * Run SAHI (Slicing Aided Hyper Inference) detection via backend.
+ * Slices the panorama into overlapping zoomed windows for better small-sign detection.
  */
-async function runDetectionOnPanorama(panoId, heading, statusEl, useCurrentPov = false) {
+async function runSahiDetection(panoId, heading, pitch, fov, statusEl) {
+    const apiUrl = window.DETECTION_CONFIG?.API_URL;
+    const apiKey = window.GOOGLE_CONFIG?.API_KEY;
+    if (!apiUrl || !apiKey) {
+        throw new Error('Detection API or Google API key not configured');
+    }
+
+    const conf = window.DETECTION_CONFIG?.CONFIDENCE_THRESHOLD ?? 0.15;
+
+    // Use half the current FOV as slice size for ~2x resolution boost
+    const sliceFov = Math.min(45, fov / 2);
+
+    if (statusEl) statusEl.textContent = `SAHI: scanning with ${sliceFov.toFixed(0)}° slices...`;
+
+    let resp;
+    try {
+        resp = await fetch(`${apiUrl}/detect-sahi`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                pano_id: panoId,
+                heading: heading,
+                pitch: pitch,
+                fov: fov,
+                slice_fov: sliceFov,
+                overlap: 0.3,
+                confidence: conf,
+                nms_iou_threshold: 0.5,
+                api_key: apiKey,
+                img_width: 640,
+                img_height: 640
+            })
+        });
+    } catch (err) {
+        console.error('SAHI request failed:', err);
+        throw new Error(`Can't reach detection API. Make sure backend is running.`);
+    }
+
+    if (!resp.ok) {
+        const errorText = await resp.text();
+        throw new Error(`SAHI detection failed: ${resp.status} - ${errorText}`);
+    }
+
+    return resp.json();
+}
+
+/**
+ * Run detection and display results on panorama.
+ * @param {boolean} useSahi - Use SAHI for better small-sign detection
+ */
+async function runDetectionOnPanorama(panoId, heading, statusEl, useCurrentPov = false, useSahi = false) {
     let fov = 90;
     let pitch = PANORAMA_DEFAULTS.pitch;
     let detectHeading = heading;
@@ -826,11 +877,38 @@ async function runDetectionOnPanorama(panoId, heading, statusEl, useCurrentPov =
         }
     }
     
-    const imageUrl = getStreetViewImageUrl(detectPanoId, detectHeading, pitch, fov, imgWidth, imgHeight);
-    
-    if (statusEl) statusEl.textContent = 'Detecting parking signs...';
+    if (statusEl) statusEl.textContent = useSahi ? 'SAHI: detecting parking signs...' : 'Detecting parking signs...';
     
     try {
+        if (useSahi) {
+            const result = await runSahiDetection(detectPanoId, detectHeading, pitch, fov, statusEl);
+
+            // SAHI returns angular detections directly
+            currentDetections = result.detections.map(det => ({
+                heading: det.heading,
+                pitch: det.pitch,
+                angularWidth: det.angular_width,
+                angularHeight: det.angular_height,
+                confidence: det.confidence,
+                class_name: det.class_name
+            }));
+
+            detectionPov = { heading: detectHeading, pitch, fov };
+            updateDetectionOverlay();
+
+            const count = result.detections.length;
+            const timeMs = result.total_inference_time_ms;
+            if (statusEl) {
+                statusEl.textContent = count > 0
+                    ? `Found ${count} parking sign${count > 1 ? 's' : ''} (${result.slices_count} slices, ${timeMs.toFixed(0)}ms). Click a box to save.`
+                    : `No parking signs detected (${result.slices_count} slices, ${timeMs.toFixed(0)}ms)`;
+            }
+
+            return result;
+        }
+
+        // Standard single-image detection
+        const imageUrl = getStreetViewImageUrl(detectPanoId, detectHeading, pitch, fov, imgWidth, imgHeight);
         const result = await runDetection(imageUrl);
         
         currentDetections = result.detections.map(det => 
