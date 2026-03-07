@@ -1492,43 +1492,16 @@ async function fetchDetectionCropPreview(det, panoId) {
   if (!apiUrl) {
     throw new Error("Detection API not configured");
   }
-  const apiKey = window.GOOGLE_CONFIG?.API_KEY;
-  if (!apiKey) {
-    throw new Error("Google API key not configured");
-  }
-
-  const previewPayload = {
-    pano_id: panoId,
-    heading: det.heading,
-    pitch: det.pitch,
-    angular_width: det.angularWidth,
-    angular_height: det.angularHeight,
-    confidence: det.confidence,
-    api_key: apiKey,
-    save: false,
-    include_image: true,
-  };
-
-  let resp = await fetch(`${apiUrl}/preview-sign`, {
+  const cropPlan = await buildDetectionCropPlan(det, panoId);
+  const resp = await fetch(`${apiUrl}/crop-sign-tiles`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(previewPayload),
+    body: JSON.stringify({
+      ...cropPlan.requestBody,
+      save: false,
+      include_image: true,
+    }),
   });
-
-  // Compatibility path for an already-running backend that has not been
-  // restarted yet and therefore does not expose /preview-sign.
-  if (resp.status === 404) {
-    const cropPlan = await buildDetectionCropPlan(det, panoId);
-    resp = await fetch(`${apiUrl}/crop-sign-tiles`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...cropPlan.requestBody,
-        save: false,
-        include_image: true,
-      }),
-    });
-  }
 
   if (!resp.ok) {
     const errText = await resp.text();
