@@ -722,25 +722,6 @@
          * Set up UI event handlers.
          */
         function setupEventHandlers() {
-            // Select button
-            document.getElementById('selectStreets').addEventListener('click', () => {
-                isSelecting = true;
-                map.getContainer().style.cursor = 'crosshair';
-                map.dragging.disable();
-                map.doubleClickZoom.disable();
-            });
-
-            // Clear button
-            document.getElementById('clearStreets').addEventListener('click', () => {
-                streetsLayer.clearLayers();
-                streetViewDotsLayer.clearLayers();
-                signMarkersLayer.clearLayers();
-                currentPoints = [];
-                currentPanoIds = [];
-                localStorage.removeItem(SIGN_MAP_STORAGE_KEY);
-                updateMapDebug(getLatestSignMapData());
-            });
-
             // Close panorama modal
             document.getElementById('closePanorama').addEventListener('click', closePanoramaModal);
             document.getElementById('panoramaModal').addEventListener('click', (e) => {
@@ -756,14 +737,6 @@
                 if (e.target.id === 'detectionModal') {
                     closeDetectionModal();
                 }
-            });
-
-            // Sync side toggles between map controls and detection modal
-            document.getElementById('detectionSideToggle').addEventListener('change', (e) => {
-                document.getElementById('sideToggle').value = e.target.value;
-            });
-            document.getElementById('sideToggle').addEventListener('change', (e) => {
-                document.getElementById('detectionSideToggle').value = e.target.value;
             });
 
             // Escape key to close modals
@@ -1051,7 +1024,7 @@
 
             if (!point || !panoId) return;
 
-            const side = document.getElementById('sideToggle').value;
+            const side = document.getElementById('detectionSideToggle').value;
             // Add 180° to look at the opposite side of the street
             const heading = (calculateHeadingWithSide(point.bearing, side, point.oneway) + 180) % 360;
 
