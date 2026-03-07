@@ -257,6 +257,21 @@
             color: rgba(255,255,255,0.7);
             font-size: 12px;
         }
+
+        #mapDebug {
+            position: fixed;
+            left: 10px;
+            bottom: 10px;
+            z-index: 1000;
+            background: rgba(255,255,255,0.94);
+            color: #111;
+            padding: 10px 12px;
+            border-radius: 6px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.18);
+            font-size: 12px;
+            line-height: 1.4;
+            min-width: 280px;
+        }
     </style>
 </head>
 <body>
@@ -278,6 +293,7 @@
     </div>
 
     <div id="map"></div>
+    <div id="mapDebug">Map debug loading...</div>
 
     <!-- Progress Bar Container -->
     <div id="progressContainer" style="display: none; position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 1500; background: white; padding: 15px 30px; border-radius: 0 0 8px 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); min-width: 350px;">
@@ -359,6 +375,105 @@
         // Store point data for click handlers
         let currentPoints = [];
         let currentPanoIds = [];
+        const SIGN_MAP_STORAGE_KEY = 'parksight_latest_sign_map_data';
+
+        function getLatestSignMapData() {
+            const raw = localStorage.getItem(SIGN_MAP_STORAGE_KEY);
+            if (!raw) return null;
+
+            try {
+                return JSON.parse(raw);
+            } catch (err) {
+                console.error('Failed to parse persisted sign map data:', err);
+                return null;
+            }
+        }
+
+        function persistLatestSignMapData(data) {
+            localStorage.setItem(SIGN_MAP_STORAGE_KEY, JSON.stringify(data));
+        }
+
+        function updateMapDebug(data = null) {
+            const debugEl = document.getElementById('mapDebug');
+            if (!debugEl || !map) return;
+
+            const bounds = map.getBounds();
+            const center = map.getCenter();
+            const signCount = data?.signs?.length ?? 0;
+            const source = data?.source || 'none';
+            const camera = data?.camera
+                ? `${data.camera.lat.toFixed(6)}, ${data.camera.lng.toFixed(6)}`
+                : 'none';
+
+            debugEl.innerHTML =
+                `zoom=${map.getZoom()}<br>` +
+                `center=${center.lat.toFixed(6)}, ${center.lng.toFixed(6)}<br>` +
+                `north=${bounds.getNorth().toFixed(6)} south=${bounds.getSouth().toFixed(6)}<br>` +
+                `east=${bounds.getEast().toFixed(6)} west=${bounds.getWest().toFixed(6)}<br>` +
+                `saved source=${source} signs=${signCount}<br>` +
+                `camera=${camera}`;
+        }
+
+        function renderSignMapData(data) {
+            signMarkersLayer.clearLayers();
+
+            if (!data?.camera) {
+                console.log('No persisted sign map data found');
+                updateMapDebug(null);
+                return;
+            }
+
+            console.log('Loaded sign map data on ui-map:', data);
+            streetViewDotsLayer.clearLayers();
+
+            const cameraCircle = L.circle([data.camera.lat, data.camera.lng], {
+                radius: 20,
+                color: '#dc2626',
+                fillColor: '#ef4444',
+                weight: 2,
+                opacity: 0.95,
+                fillOpacity: 0.65
+            }).addTo(signMarkersLayer);
+
+            const signCount = Array.isArray(data.signs) ? data.signs.length : 0;
+            cameraCircle.bindPopup(
+                `<b>Panorama point</b><br>` +
+                `Pano: ${data.panoId || 'unknown'}<br>` +
+                `Projected signs: ${signCount}`
+            );
+
+            for (const sign of data.signs || []) {
+                const signCircle = L.circle([sign.lat, sign.lng], {
+                    radius: 10,
+                    color: '#16a34a',
+                    fillColor: '#22c55e',
+                    weight: 2,
+                    opacity: 0.95,
+                    fillOpacity: 0.65
+                }).addTo(signMarkersLayer);
+
+                signCircle.bindPopup(
+                    `<b>Parking sign</b><br>` +
+                    `Confidence: ${(sign.confidence * 100).toFixed(0)}%<br>` +
+                    `Distance: ${sign.distance.toFixed(1)}m<br>` +
+                    `Method: ${sign.method}`
+                );
+            }
+
+            console.log(
+                `Rendered ${signCount} projected sign markers and 1 panorama marker from ${data.source || 'unknown source'}`
+            );
+
+            const boundsPoints = [
+                [data.camera.lat, data.camera.lng],
+                ...(data.signs || []).map(sign => [sign.lat, sign.lng])
+            ];
+            if (boundsPoints.length > 0) {
+                map.fitBounds(boundsPoints, { padding: [60, 60], maxZoom: 19 });
+            }
+
+            updateMapDebug(data);
+        }
 
         /**
          * Initialize the application after Google Maps API loads.
@@ -386,6 +501,26 @@
 
             // Set up event handlers
             setupEventHandlers();
+            renderSignMapData(getLatestSignMapData());
+
+            window.addEventListener('storage', (event) => {
+                if (event.key === SIGN_MAP_STORAGE_KEY) {
+                    renderSignMapData(getLatestSignMapData());
+                }
+            });
+
+            map.on('moveend zoomend', () => {
+                updateMapDebug(getLatestSignMapData());
+                const bounds = map.getBounds();
+                console.log('Map viewport:', {
+                    zoom: map.getZoom(),
+                    center: map.getCenter(),
+                    north: bounds.getNorth(),
+                    south: bounds.getSouth(),
+                    east: bounds.getEast(),
+                    west: bounds.getWest()
+                });
+            });
 
             console.log('App initialized');
         }
@@ -409,6 +544,7 @@
                 signMarkersLayer.clearLayers();
                 currentPoints = [];
                 currentPanoIds = [];
+                localStorage.removeItem(SIGN_MAP_STORAGE_KEY);
             });
 
             // Close panorama modal
@@ -722,9 +858,8 @@
             if (!point || !panoId) return;
 
             const side = document.getElementById('sideToggle').value;
-            // Flip 180° to look behind the direction of travel
-            const rawHeading = calculateHeadingWithSide(point.bearing, side, point.oneway);
-            const heading = (rawHeading + 180) % 360;
+            // Add 180° to look at the opposite side of the street
+            const heading = (calculateHeadingWithSide(point.bearing, side, point.oneway) + 180) % 360;
 
             // Store context for detection (pointIndex for position fallback)
             currentDetectionContext = { panoId, heading, pointIndex: index };
@@ -748,7 +883,7 @@
             initDetectionPanorama(panoId, heading, container);
 
             // Update status - no auto-detection, user clicks Re-detect
-            statusEl.textContent = 'Click "Detect" to scan for parking signs';
+            statusEl.textContent = `Click "Detect" to scan (heading: ${Math.round(heading)}°, v2)`;
         }
 
         /**
@@ -766,8 +901,19 @@
                 const result = await runDetectionOnPanorama(panoId, null, statusEl, true, useSahi);
 
                 // Project detected signs onto the map
+                console.log(`rerunDetection: ${currentDetections.length} detections found, signMarkersLayer exists: ${!!signMarkersLayer}`);
+                console.log('=== DETECTION COMPLETE ===');
+                currentDetections.forEach((det, i) => {
+                    console.log(`  Detection ${i}: heading=${det.heading.toFixed(1)}° pitch=${det.pitch.toFixed(1)}° conf=${det.confidence.toFixed(2)}`);
+                });
                 if (currentDetections.length > 0) {
-                    plotDetectedSigns();
+                    try {
+                        plotDetectedSigns();
+                    } catch (plotErr) {
+                        console.error('plotDetectedSigns error:', plotErr);
+                    }
+                } else {
+                    console.log('No detections to plot');
                 }
             } catch (err) {
                 console.error('Re-detection failed:', err);
@@ -776,67 +922,35 @@
         }
 
         /**
-         * Project detected signs from the current panorama onto the Leaflet map.
-         * Uses pitch-based distance estimation via estimateSignLocation().
+         * Plot the current panorama point and projected sign locations on the map.
          */
         function plotDetectedSigns() {
-            if (!detectionPanorama || currentDetections.length === 0) return;
-
-            // Get camera position: try panorama object first, fall back to stored point
-            let cameraLat, cameraLng;
-            const pos = detectionPanorama.getPosition();
-            if (pos) {
-                cameraLat = pos.lat();
-                cameraLng = pos.lng();
-            } else if (currentDetectionContext?.pointIndex != null) {
-                const pt = currentPoints[currentDetectionContext.pointIndex];
-                if (pt) {
-                    cameraLat = pt.lat;
-                    cameraLng = pt.lon;
-                }
-            }
-
-            if (cameraLat == null || cameraLng == null) {
-                console.warn('Cannot plot signs: no camera position available');
+            if (currentDetections.length === 0 || !currentDetectionContext) {
+                console.warn('plotDetectedSigns: nothing to render');
                 return;
             }
 
-            console.log(`Plotting ${currentDetections.length} signs from camera at (${cameraLat.toFixed(6)}, ${cameraLng.toFixed(6)})`);
-
-            // Estimate real-world location for each detection
-            const signLocations = estimateAllSignLocations(cameraLat, cameraLng);
-
-            const signIcon = L.divIcon({
-                className: 'sign-marker-icon',
-                html: '🅿️',
-                iconSize: [24, 24],
-                iconAnchor: [12, 12]
-            });
-
-            for (const sign of signLocations) {
-                // Create sign marker with icon for visibility
-                const marker = L.marker([sign.lat, sign.lng], { icon: signIcon })
-                    .addTo(signMarkersLayer);
-
-                const distLabel = sign.distance.toFixed(1);
-                const confLabel = (sign.confidence * 100).toFixed(0);
-                marker.bindTooltip(
-                    `🅿️ ${sign.class_name} (${confLabel}%)<br>` +
-                    `${distLabel}m from camera (${sign.method})`,
-                    { permanent: false, direction: 'top' }
-                );
-
-                // Draw a line from camera to sign
-                L.polyline(
-                    [[cameraLat, cameraLng], [sign.lat, sign.lng]],
-                    { color: '#e53e3e', weight: 2, opacity: 0.5, dashArray: '4,4' }
-                ).addTo(signMarkersLayer);
-
-                console.log(
-                    `Sign plotted: ${sign.class_name} at (${sign.lat.toFixed(6)}, ${sign.lng.toFixed(6)}) ` +
-                    `dist=${distLabel}m heading=${sign.heading.toFixed(1)}° method=${sign.method}`
-                );
+            const idx = currentDetectionContext?.pointIndex;
+            if (idx == null || !currentPoints[idx]) {
+                console.error('plotDetectedSigns: no pointIndex in context');
+                return;
             }
+            const cameraLat = currentPoints[idx].lat;
+            const cameraLng = currentPoints[idx].lon;
+            const signLocations = estimateAllSignLocations(cameraLat, cameraLng);
+            const data = {
+                savedAt: Date.now(),
+                source: 'ui-map',
+                panoId: currentDetectionContext.panoId,
+                camera: {
+                    lat: cameraLat,
+                    lng: cameraLng
+                },
+                signs: signLocations
+            };
+
+            persistLatestSignMapData(data);
+            renderSignMapData(data);
         }
 
         /**

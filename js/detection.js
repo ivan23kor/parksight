@@ -1073,6 +1073,46 @@ async function cropAndSaveSign(det, cropCenterOverride = null) {
 
 // Google Street View camera height in meters (roof-mounted camera)
 const SV_CAMERA_HEIGHT = 2.5;
+const EARTH_RADIUS_METERS = 6371000;
+
+/**
+ * Project a point from a start lat/lng by distance and bearing.
+ * Uses a spherical-earth forward geodesic so detection projection works
+ * even on pages that do not load Turf.js.
+ *
+ * @param {number} lat - Start latitude in degrees
+ * @param {number} lng - Start longitude in degrees
+ * @param {number} distanceMeters - Distance in meters
+ * @param {number} bearingDegrees - Bearing in degrees
+ * @returns {{lat: number, lng: number}}
+ */
+function projectLatLng(lat, lng, distanceMeters, bearingDegrees) {
+    const angularDistance = distanceMeters / EARTH_RADIUS_METERS;
+    const bearingRad = bearingDegrees * Math.PI / 180;
+    const lat1 = lat * Math.PI / 180;
+    const lng1 = lng * Math.PI / 180;
+
+    const sinLat1 = Math.sin(lat1);
+    const cosLat1 = Math.cos(lat1);
+    const sinAd = Math.sin(angularDistance);
+    const cosAd = Math.cos(angularDistance);
+
+    const lat2 = Math.asin(
+        sinLat1 * cosAd + cosLat1 * sinAd * Math.cos(bearingRad)
+    );
+
+    const lng2 = lng1 + Math.atan2(
+        Math.sin(bearingRad) * sinAd * cosLat1,
+        cosAd - sinLat1 * Math.sin(lat2)
+    );
+
+    const normalizedLng = ((lng2 * 180 / Math.PI + 540) % 360) - 180;
+
+    return {
+        lat: lat2 * 180 / Math.PI,
+        lng: normalizedLng
+    };
+}
 
 /**
  * Estimate the real-world location of a detected sign using pitch-based distance estimation.
@@ -1082,8 +1122,7 @@ const SV_CAMERA_HEIGHT = 2.5;
  *
  *   distance = cameraHeight / tan(|pitch|)
  *
- * Then we project that distance along the sign's compass heading from the camera position
- * using turf.destination().
+ * Then we project that distance along the sign's compass heading from the camera position.
  *
  * @param {number} cameraLat - Panorama camera latitude
  * @param {number} cameraLng - Panorama camera longitude
@@ -1098,17 +1137,12 @@ function estimateSignLocation(cameraLat, cameraLng, detection, cameraHeight = SV
     // Use a minimum downward angle of -1° to avoid huge/infinite distances
     if (pitch >= -1) {
         // Fallback: place at a fixed distance of 10m
-        const fallbackDistance = 0.010; // km
-        const dest = turf.destination(
-            turf.point([cameraLng, cameraLat]),
-            fallbackDistance,
-            detection.heading,
-            { units: 'kilometers' }
-        );
+        const fallbackDistanceMeters = 10;
+        const dest = projectLatLng(cameraLat, cameraLng, fallbackDistanceMeters, detection.heading);
         return {
-            lat: dest.geometry.coordinates[1],
-            lng: dest.geometry.coordinates[0],
-            distance: fallbackDistance * 1000,
+            lat: dest.lat,
+            lng: dest.lng,
+            distance: fallbackDistanceMeters,
             heading: detection.heading,
             confidence: detection.confidence,
             class_name: detection.class_name,
@@ -1124,17 +1158,11 @@ function estimateSignLocation(cameraLat, cameraLng, detection, cameraHeight = SV
     distance = Math.max(3, Math.min(50, distance));
 
     // Project from camera position along the sign's heading
-    const distKm = distance / 1000;
-    const dest = turf.destination(
-        turf.point([cameraLng, cameraLat]),
-        distKm,
-        detection.heading,
-        { units: 'kilometers' }
-    );
+    const dest = projectLatLng(cameraLat, cameraLng, distance, detection.heading);
 
     return {
-        lat: dest.geometry.coordinates[1],
-        lng: dest.geometry.coordinates[0],
+        lat: dest.lat,
+        lng: dest.lng,
         distance,
         heading: detection.heading,
         confidence: detection.confidence,

@@ -160,6 +160,7 @@
         // 34 Vassar St, Boston
         const INITIAL_LOCATION = { lat: 42.3615, lon: -71.0921 };
         const BASE_HEADING = 90; // Facing east along 9 Ave
+        const SIGN_MAP_STORAGE_KEY = 'parksight_latest_sign_map_data';
 
         let currentPanoId = null;
         let currentBaseHeading = BASE_HEADING;
@@ -217,6 +218,41 @@
 
             try {
                 await runDetectionOnPanorama(currentPanoId, null, statusEl, true, useSahi);
+
+                // Log camera position and detected sign coordinates
+                const pos = detectionPanorama.getPosition();
+                const camLat = pos ? pos.lat() : INITIAL_LOCATION.lat;
+                const camLng = pos ? pos.lng() : INITIAL_LOCATION.lon;
+                const signLocations = (camLat != null && camLng != null)
+                    ? estimateAllSignLocations(camLat, camLng)
+                    : [];
+                console.log(`=== DETECTION RESULTS ===`);
+                console.log(`Camera position: (${camLat}, ${camLng})`);
+                console.log(`Pano ID: ${currentPanoId}`);
+                console.log(`Detections: ${currentDetections.length}`);
+                currentDetections.forEach((det, i) => {
+                    console.log(`  Sign ${i}: heading=${det.heading.toFixed(1)}° pitch=${det.pitch.toFixed(1)}° angW=${det.angularWidth.toFixed(2)}° angH=${det.angularHeight.toFixed(2)}° conf=${det.confidence.toFixed(2)}`);
+                });
+                signLocations.forEach((sign, i) => {
+                    console.log(`  Map sign ${i}: lat=${sign.lat.toFixed(6)} lng=${sign.lng.toFixed(6)} dist=${sign.distance.toFixed(1)}m method=${sign.method}`);
+                });
+                console.log(`=========================`);
+
+                if (camLat != null && camLng != null) {
+                    const mapData = {
+                        savedAt: Date.now(),
+                        source: 'ui-panorama',
+                        panoId: currentPanoId,
+                        camera: {
+                            lat: camLat,
+                            lng: camLng
+                        },
+                        signs: signLocations
+                    };
+                    localStorage.setItem(SIGN_MAP_STORAGE_KEY, JSON.stringify(mapData));
+                    window.latestSignMapData = mapData;
+                    console.log('Saved sign map data:', mapData);
+                }
             } catch (err) {
                 console.error('Detection failed:', err);
             }
