@@ -227,18 +227,14 @@ async function mockExternalDependencies(page, options = {}) {
       body: JSON.stringify(response),
     });
   });
-  await page.route("http://127.0.0.1:8000/preview-sign", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        width: 640,
-        height: 640,
-        image_base64: PREVIEW_IMAGE_BASE64,
-      }),
-    });
-  });
   await page.route("http://127.0.0.1:8000/crop-sign-tiles", async (route) => {
+    const body = route.request().postDataJSON();
+    expect(body.save).toBe(false);
+    expect(body.include_image).toBe(true);
+    expect(Array.isArray(body.tiles)).toBe(true);
+    expect(body.tiles.length).toBeGreaterThan(0);
+    expect(typeof body.session_token).toBe("string");
+    expect(body.session_token.length).toBeGreaterThan(0);
     await route.fulfill({
       status: 200,
       contentType: "application/json",
