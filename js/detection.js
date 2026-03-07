@@ -27,6 +27,10 @@ const TILE_GRID_WIDTH = 32 * TILE_SIZE; // 16384
 const TILE_GRID_HEIGHT = 16 * TILE_SIZE; // 8192
 const CROP_PADDING_X = 1.2; // 20% wider total around the detected sign
 const CROP_PADDING_Y = 1.35; // More vertical context for stacked sign groups
+const DETECTION_CLUSTER_WIDTH_RATIO = 1.25;
+const DETECTION_CLUSTER_HEIGHT_RATIO = 2.4;
+const DETECTION_CLUSTER_WIDTH_FLOOR = 0.35;
+const DETECTION_CLUSTER_HEIGHT_FLOOR = 1.0;
 
 /**
  * Convert heading/pitch to pixel coordinates in the full panorama tile image.
@@ -129,6 +133,122 @@ function getTilesForRegion(
   };
 
   return { tiles, tileX1, tileY1, cropBounds };
+}
+
+function mergeAngularDetections(detections) {
+  if (!Array.isArray(detections) || detections.length === 0) {
+    return [];
+  }
+
+  let heading = detections[0].heading;
+  let pitch = detections[0].pitch;
+  let minPitch = detections[0].pitch - detections[0].angularHeight / 2;
+  let maxPitch = detections[0].pitch + detections[0].angularHeight / 2;
+  let confidence = detections[0].confidence;
+  let className = detections[0].class_name;
+
+  let minHeadingOffset = 0 - detections[0].angularWidth / 2;
+  let maxHeadingOffset = 0 + detections[0].angularWidth / 2;
+
+  for (let i = 1; i < detections.length; i += 1) {
+    const det = detections[i];
+    const headingDelta = signedAngleDeltaDegrees(det.heading, heading);
+    minHeadingOffset = Math.min(
+      minHeadingOffset,
+      headingDelta - det.angularWidth / 2,
+    );
+    maxHeadingOffset = Math.max(
+      maxHeadingOffset,
+      headingDelta + det.angularWidth / 2,
+    );
+    minPitch = Math.min(minPitch, det.pitch - det.angularHeight / 2);
+    maxPitch = Math.max(maxPitch, det.pitch + det.angularHeight / 2);
+
+    const spanCenterOffset = (minHeadingOffset + maxHeadingOffset) / 2;
+    heading = normalizeBearingDegrees(heading + spanCenterOffset);
+    minHeadingOffset -= spanCenterOffset;
+    maxHeadingOffset -= spanCenterOffset;
+    pitch = (minPitch + maxPitch) / 2;
+    if (det.confidence >= confidence) {
+      confidence = det.confidence;
+      className = det.class_name;
+    }
+  }
+
+  return {
+    heading,
+    pitch,
+    angularWidth: maxHeadingOffset - minHeadingOffset,
+    angularHeight: maxPitch - minPitch,
+    confidence,
+    class_name: className,
+    sourceDetections: detections.length,
+  };
+}
+
+function shouldClusterAngularDetections(a, b) {
+  const headingDelta = Math.abs(signedAngleDeltaDegrees(a.heading, b.heading));
+  const pitchDelta = Math.abs(a.pitch - b.pitch);
+
+  const combinedHalfWidth = (a.angularWidth + b.angularWidth) / 2;
+  const combinedHalfHeight = (a.angularHeight + b.angularHeight) / 2;
+
+  const headingGap = Math.max(0, headingDelta - combinedHalfWidth);
+  const pitchGap = Math.max(0, pitchDelta - combinedHalfHeight);
+
+  const allowedHeadingGap =
+    Math.max(a.angularWidth, b.angularWidth) * DETECTION_CLUSTER_WIDTH_RATIO +
+    DETECTION_CLUSTER_WIDTH_FLOOR;
+  const allowedPitchGap =
+    Math.max(a.angularHeight, b.angularHeight) * DETECTION_CLUSTER_HEIGHT_RATIO +
+    DETECTION_CLUSTER_HEIGHT_FLOOR;
+
+  const verticallyCompatible =
+    headingGap <= allowedHeadingGap && pitchGap <= allowedPitchGap;
+  const horizontallyCompatible =
+    pitchGap <= Math.max(a.angularHeight, b.angularHeight) * 0.8 + 0.35 &&
+    headingGap <=
+      Math.max(a.angularWidth, b.angularWidth) * 1.8 +
+        DETECTION_CLUSTER_WIDTH_FLOOR;
+
+  const directOverlap =
+    headingDelta <= combinedHalfWidth && pitchDelta <= combinedHalfHeight;
+
+  return directOverlap || verticallyCompatible || horizontallyCompatible;
+}
+
+function clusterAngularDetections(detections) {
+  if (!Array.isArray(detections) || detections.length <= 1) {
+    return detections || [];
+  }
+
+  const remaining = [...detections].sort((a, b) => b.confidence - a.confidence);
+  const clusters = [];
+
+  while (remaining.length > 0) {
+    const seed = remaining.shift();
+    const cluster = [seed];
+    let changed = true;
+
+    while (changed) {
+      changed = false;
+      for (let i = remaining.length - 1; i >= 0; i -= 1) {
+        if (
+          cluster.some((existing) =>
+            shouldClusterAngularDetections(existing, remaining[i]),
+          )
+        ) {
+          cluster.push(remaining[i]);
+          remaining.splice(i, 1);
+          changed = true;
+        }
+      }
+    }
+
+    clusters.push(mergeAngularDetections(cluster));
+  }
+
+  return clusters.sort((a, b) => b.confidence - a.confidence);
 }
 
 /**
@@ -1153,19 +1273,21 @@ async function runDetectionOnPanorama(
       );
 
       // SAHI returns angular detections directly
-      currentDetections = result.detections.map((det) => ({
-        heading: det.heading,
-        pitch: det.pitch,
-        angularWidth: det.angular_width,
-        angularHeight: det.angular_height,
-        confidence: det.confidence,
-        class_name: det.class_name,
-      }));
+      currentDetections = clusterAngularDetections(
+        result.detections.map((det) => ({
+          heading: det.heading,
+          pitch: det.pitch,
+          angularWidth: det.angular_width,
+          angularHeight: det.angular_height,
+          confidence: det.confidence,
+          class_name: det.class_name,
+        })),
+      );
 
       detectionPov = { heading: detectHeading, pitch, fov };
       updateDetectionOverlay();
 
-      const count = result.detections.length;
+      const count = currentDetections.length;
       const timeMs = result.total_inference_time_ms;
       if (statusEl) {
         statusEl.textContent =
@@ -1188,14 +1310,16 @@ async function runDetectionOnPanorama(
     );
     const result = await runDetection(imageUrl);
 
-    currentDetections = result.detections.map((det) =>
-      detectionToAngular(det, detectHeading, pitch, fov, imgWidth, imgHeight),
+    currentDetections = clusterAngularDetections(
+      result.detections.map((det) =>
+        detectionToAngular(det, detectHeading, pitch, fov, imgWidth, imgHeight),
+      ),
     );
 
     detectionPov = { heading: detectHeading, pitch, fov };
     updateDetectionOverlay();
 
-    const count = result.detections.length;
+    const count = currentDetections.length;
     const timeMs = result.inference_time_ms;
     if (statusEl) {
       statusEl.textContent =
