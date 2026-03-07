@@ -1,371 +1,398 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Street View Driver Perspective</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 0;
+        height: 100vh;
+        overflow: hidden;
+        background: #111827;
+      }
+
+      #splitLayout {
+        display: flex;
+        width: 100%;
+        height: 100%;
+      }
+
+      #panoramaPane,
+      #mapPane {
+        position: relative;
+        width: 50%;
+        height: 100%;
+        min-width: 0;
+      }
+
+      #panoramaPane {
+        background: #000;
+        border-right: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      #mapPane {
+        background: #f3f4f6;
+      }
+
+      #map {
+        width: 100%;
+        height: 100%;
+      }
+
+      button {
+        background: #007cba;
+        color: white;
+        border: none;
+        padding: 8px 15px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+        margin-right: 10px;
+      }
+
+      button:hover {
+        background: #005a87;
+      }
+
+      select {
+        padding: 8px 12px;
+        border-radius: 4px;
+        border: 1px solid #ccc;
+        font-size: 14px;
+        cursor: pointer;
+      }
+
+      #progressContainer {
+        opacity: 0;
+        transition: opacity 0.3s ease;
+      }
+
+      #progressContainer.visible {
+        opacity: 1;
+      }
+
+      #progressBar.indeterminate {
+        background: linear-gradient(
+          90deg,
+          #007cba 30%,
+          #005a87 50%,
+          #007cba 70%
+        );
+        background-size: 200% 100%;
+        animation: indeterminate 1.5s infinite;
+      }
+
+      @keyframes indeterminate {
+        0% {
+          background-position: -200% 0;
+        }
+        100% {
+          background-position: 200% 0;
+        }
+      }
+
+      #detectionControls {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        z-index: 2001;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: rgba(17, 24, 39, 0.78);
+        backdrop-filter: blur(10px);
+      }
+
+      #detectionControls button {
+        background: rgba(255, 255, 255, 0.92);
+        color: #333;
+        border: none;
+        padding: 10px 16px;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+        margin-right: 0;
+      }
+
+      #detectionControls button:hover {
+        background: white;
+      }
+
+      #detectionControls select {
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: none;
+        font-size: 14px;
+        cursor: pointer;
+        background: rgba(255, 255, 255, 0.92);
+      }
+
+      #detectionControls select:hover {
+        background: white;
+      }
+
+      #detectionPanorama {
+        width: 100%;
+        height: 100%;
+        position: relative;
+      }
+
+      #emptyPanoramaState {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 32px;
+        color: rgba(255, 255, 255, 0.86);
+        text-align: center;
+        font-size: 16px;
+        line-height: 1.5;
+        background:
+          radial-gradient(
+            circle at top,
+            rgba(59, 130, 246, 0.18),
+            transparent 38%
+          ),
+          linear-gradient(180deg, rgba(17, 24, 39, 0.3), rgba(17, 24, 39, 0.92));
+      }
+
+      #emptyPanoramaState.hidden {
+        display: none;
+      }
+
+      #detectionOverlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 100;
+      }
+
+      .detection-box {
+        position: absolute;
+        border: 3px solid;
+        box-sizing: border-box;
+        pointer-events: none;
+      }
+
+      .detection-label {
+        position: absolute;
+        top: -22px;
+        left: 0;
+        padding: 2px 6px;
+        font-size: 12px;
+        font-weight: bold;
+        color: white;
+        white-space: nowrap;
+        border-radius: 2px;
+      }
+
+      #detectionStatus {
+        position: absolute;
+        bottom: 56px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: white;
+        font-size: 16px;
+        text-align: center;
+        background: rgba(0, 0, 0, 0.7);
+        padding: 8px 16px;
+        border-radius: 4px;
+        z-index: 101;
+        max-width: calc(100% - 32px);
+      }
+
+      .sign-marker-icon {
+        font-size: 20px;
+        line-height: 24px;
+        text-align: center;
+        background: none;
+        border: none;
+      }
+
+      #detectionInfo {
+        position: absolute;
+        bottom: 20px;
+        left: 20px;
+        color: rgba(255, 255, 255, 0.7);
+        font-size: 12px;
+        z-index: 101;
+      }
+
+      #mapDebug {
+        position: absolute;
+        right: 10px;
+        bottom: 10px;
+        z-index: 1000;
+        background: rgba(255, 255, 255, 0.94);
+        color: #111;
+        padding: 10px 12px;
+        border-radius: 6px;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+        font-size: 12px;
+        line-height: 1.4;
+        min-width: 280px;
+      }
+
+      .sign-preview-popup {
+        min-width: 180px;
+      }
+
+      .sign-preview-popup img {
+        display: block;
+        width: 100%;
+        height: auto;
+        border-radius: 6px;
+        margin-bottom: 8px;
+        background: #f3f4f6;
+      }
+
+      .sign-preview-popup .preview-loading,
+      .sign-preview-popup .preview-error {
+        color: #4b5563;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+
+      @media (max-width: 900px) {
+        #splitLayout {
+          flex-direction: column;
         }
 
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            height: 100vh;
+        #panoramaPane,
+        #mapPane {
+          width: 100%;
+          height: 50%;
         }
 
-        #map {
-            width: 100%;
-            height: 100%;
-        }
-
-        button {
-            background: #007cba;
-            color: white;
-            border: none;
-            padding: 8px 15px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-            margin-right: 10px;
-        }
-
-        button:hover {
-            background: #005a87;
-        }
-
-        select {
-            padding: 8px 12px;
-            border-radius: 4px;
-            border: 1px solid #ccc;
-            font-size: 14px;
-            cursor: pointer;
-        }
-
-        .controls {
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            z-index: 1000;
-            background: white;
-            padding: 10px;
-            border-radius: 5px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
-
-        #uiSwitcher {
-            position: fixed;
-            top: 10px;
-            left: 10px;
-            z-index: 1000;
-        }
-
-        #uiSwitcher {
-            display: inline-flex;
-            gap: 4px;
-            padding: 4px;
-            border-radius: 999px;
-            background: rgba(255,255,255,0.92);
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
-
-        .viewToggle {
-            padding: 8px 12px;
-            border-radius: 999px;
-            border: none;
-            font-size: 14px;
-            cursor: pointer;
-            background: transparent;
-            color: #333;
-            margin-right: 0;
-            transition: background 0.15s ease, color 0.15s ease;
-        }
-
-        .viewToggle:hover {
-            background: rgba(0,0,0,0.06);
-        }
-
-        .viewToggle.active {
-            background: #007cba;
-            color: white;
-        }
-
-        .controls button {
-            margin-right: 0;
-        }
-
-        #progressContainer {
-            opacity: 0;
-            transition: opacity 0.3s ease;
-        }
-
-        #progressContainer.visible {
-            opacity: 1;
-        }
-
-        #progressBar.indeterminate {
-            background: linear-gradient(90deg, #007cba 30%, #005a87 50%, #007cba 70%);
-            background-size: 200% 100%;
-            animation: indeterminate 1.5s infinite;
-        }
-
-        @keyframes indeterminate {
-            0% { background-position: -200% 0; }
-            100% { background-position: 200% 0; }
-        }
-
-        /* Panorama Modal */
-        #panoramaModal {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.9);
-            z-index: 2000;
-        }
-
-        #panoramaModal.visible {
-            display: block;
-        }
-
-        #panoramaContainer {
-            width: 100%;
-            height: 100%;
-        }
-
-        #closePanorama {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            z-index: 2001;
-            background: rgba(255,255,255,0.9);
-            color: #333;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 16px;
-        }
-
-        #closePanorama:hover {
-            background: white;
-        }
-
-        /* Detection Modal */
-        #detectionModal {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.95);
-            z-index: 2000;
-        }
-
-        #detectionModal.visible {
-            display: block;
+        #panoramaPane {
+          border-right: none;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.08);
         }
 
         #detectionControls {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            z-index: 2001;
-            display: flex;
-            gap: 10px;
+          flex-wrap: wrap;
+          right: 16px;
         }
-
-        #detectionControls button {
-            background: rgba(255,255,255,0.9);
-            color: #333;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-        }
-
-        #detectionControls button:hover {
-            background: white;
-        }
-
-        #detectionControls select {
-            padding: 10px 12px;
-            border-radius: 4px;
-            border: none;
-            font-size: 14px;
-            cursor: pointer;
-            background: rgba(255,255,255,0.9);
-        }
-
-        #detectionControls select:hover {
-            background: white;
-        }
-
-        #detectionPanorama {
-            width: 100%;
-            height: 100%;
-            position: relative;
-        }
-
-        #detectionOverlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: 100;
-        }
-
-        .detection-box {
-            position: absolute;
-            border: 3px solid;
-            box-sizing: border-box;
-            pointer-events: none;
-        }
-
-        .detection-label {
-            position: absolute;
-            top: -22px;
-            left: 0;
-            padding: 2px 6px;
-            font-size: 12px;
-            font-weight: bold;
-            color: white;
-            white-space: nowrap;
-            border-radius: 2px;
-        }
-
-        #detectionStatus {
-            position: absolute;
-            bottom: 60px;
-            left: 50%;
-            transform: translateX(-50%);
-            color: white;
-            font-size: 16px;
-            text-align: center;
-            background: rgba(0,0,0,0.7);
-            padding: 8px 16px;
-            border-radius: 4px;
-            z-index: 101;
-        }
-
-        .sign-marker-icon {
-            font-size: 20px;
-            line-height: 24px;
-            text-align: center;
-            background: none;
-            border: none;
-        }
-
-        #detectionInfo {
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            color: rgba(255,255,255,0.7);
-            font-size: 12px;
-        }
-
-        #mapDebug {
-            position: fixed;
-            left: 10px;
-            bottom: 10px;
-            z-index: 1000;
-            background: rgba(255,255,255,0.94);
-            color: #111;
-            padding: 10px 12px;
-            border-radius: 6px;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.18);
-            font-size: 12px;
-            line-height: 1.4;
-            min-width: 280px;
-        }
-
-        .sign-preview-popup {
-            min-width: 180px;
-        }
-
-        .sign-preview-popup img {
-            display: block;
-            width: 100%;
-            height: auto;
-            border-radius: 6px;
-            margin-bottom: 8px;
-            background: #f3f4f6;
-        }
-
-        .sign-preview-popup .preview-loading,
-        .sign-preview-popup .preview-error {
-            color: #4b5563;
-            font-size: 13px;
-            line-height: 1.4;
-        }
-
+      }
     </style>
-</head>
-<body>
-    <div id="uiSwitcher">
-        <button type="button" class="viewToggle" onclick="window.location.href='../ui-panorama/'">🔭 Panorama</button>
-        <button type="button" class="viewToggle active" aria-current="page">📍 Map</button>
-    </div>
-
-    <div class="controls">
-    </div>
-
-    <div id="map"></div>
-    <div id="mapDebug">Map debug loading...</div>
-
-    <!-- Progress Bar Container -->
-    <div id="progressContainer" style="display: none; position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 1500; background: white; padding: 15px 30px; border-radius: 0 0 8px 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); min-width: 350px;">
-        <div id="progressText" style="margin-bottom: 8px; font-size: 14px; color: #333; text-align: center;">Loading...</div>
-        <div style="width: 100%; height: 6px; background: #e0e0e0; border-radius: 3px; overflow: hidden;">
-            <div id="progressBar" style="height: 100%; background: #007cba; width: 0%; transition: width 0.3s ease; border-radius: 3px;"></div>
-        </div>
-        <div id="progressDetails" style="margin-top: 5px; font-size: 12px; color: #666; text-align: center;"></div>
-    </div>
-
-    <!-- Panorama Modal -->
-    <div id="panoramaModal">
-        <button id="closePanorama">✕ Close</button>
-        <div id="panoramaContainer"></div>
-    </div>
-
-    <!-- Detection Modal -->
-    <div id="detectionModal">
+  </head>
+  <body>
+    <div id="splitLayout">
+      <section id="panoramaPane" aria-label="Street View panorama">
         <div id="detectionControls">
-            <select id="detectionSideToggle">
-                <option value="right">Right side</option>
-                <option value="left">Left side</option>
-            </select>
-            <select id="detectMode">
-                <option value="standard">Standard</option>
-                <option value="sahi" selected>SAHI</option>
-            </select>
-            <button id="redetectBtn">🔍 Detect</button>
-            <button id="closeDetection">✕ Close</button>
+          <select id="detectionSideToggle">
+            <option value="right">Right side</option>
+            <option value="left">Left side</option>
+          </select>
+          <select id="detectMode">
+            <option value="standard">Standard</option>
+            <option value="sahi" selected>SAHI</option>
+          </select>
+          <button id="redetectBtn">Detect</button>
+          <button id="clearPanoramaBtn">Clear</button>
         </div>
         <div id="detectionPanorama"></div>
+        <div id="emptyPanoramaState">
+          Select an area on the map, then click a Street View point to load the
+          panorama on the left.
+        </div>
         <svg id="detectionOverlay"></svg>
-        <div id="detectionStatus">Loading...</div>
+        <div id="detectionStatus">Select a Street View point on the map.</div>
         <div id="detectionInfo"></div>
+      </section>
+
+      <section id="mapPane" aria-label="Map view">
+        <div id="map"></div>
+        <div id="mapDebug">Map debug loading...</div>
+      </section>
+    </div>
+
+    <!-- Progress Bar Container -->
+    <div
+      id="progressContainer"
+      style="
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 1500;
+        background: white;
+        padding: 15px 30px;
+        border-radius: 0 0 8px 8px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        min-width: 350px;
+      "
+    >
+      <div
+        id="progressText"
+        style="
+          margin-bottom: 8px;
+          font-size: 14px;
+          color: #333;
+          text-align: center;
+        "
+      >
+        Loading...
+      </div>
+      <div
+        style="
+          width: 100%;
+          height: 6px;
+          background: #e0e0e0;
+          border-radius: 3px;
+          overflow: hidden;
+        "
+      >
+        <div
+          id="progressBar"
+          style="
+            height: 100%;
+            background: #007cba;
+            width: 0%;
+            transition: width 0.3s ease;
+            border-radius: 3px;
+          "
+        ></div>
+      </div>
+      <div
+        id="progressDetails"
+        style="
+          margin-top: 5px;
+          font-size: 12px;
+          color: #666;
+          text-align: center;
+        "
+      ></div>
     </div>
 
     <!-- External Libraries -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
-    
+
     <!-- Config and Modules -->
     <script src="/env.js"></script>
     <script src="../config.js"></script>
@@ -377,778 +404,831 @@
 
     <!-- Google Maps API (loaded after config.js so we have the API key) -->
     <script>
-        // Load Google Maps API dynamically
-        (function loadGoogleMapsAPI() {
-            const apiKey = window.GOOGLE_CONFIG?.API_KEY;
-            if (!apiKey) {
-                console.error('Google API key not configured');
-                return;
-            }
-            const script = document.createElement('script');
-            script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&callback=initApp`;
-            script.async = true;
-            script.defer = true;
-            document.head.appendChild(script);
-        })();
+      // Load Google Maps API dynamically
+      (function loadGoogleMapsAPI() {
+        const apiKey = window.GOOGLE_CONFIG?.API_KEY;
+        if (!apiKey) {
+          console.error("Google API key not configured");
+          return;
+        }
+        const script = document.createElement("script");
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&callback=initApp`;
+        script.async = true;
+        script.defer = true;
+        document.head.appendChild(script);
+      })();
     </script>
 
     <script>
-        // Global state
-        let map;
-        let streetsLayer;
-        let streetViewDotsLayer;
-        let selectionLayer;
-        let signMarkersLayer;
-        let isSelecting = false;
-        let isDrawingRect = false;
-        let selectionStart = null;
-        let selectionRect = null;
+      // Global state
+      let map;
+      let streetsLayer;
+      let streetViewDotsLayer;
+      let selectionLayer;
+      let signMarkersLayer;
+      let isSelecting = false;
+      let isDrawingRect = false;
+      let selectionStart = null;
+      let selectionRect = null;
 
-        // Store point data for click handlers
-        let currentPoints = [];
-        let currentPanoIds = [];
-        const SIGN_MAP_STORAGE_KEY = 'parksight_latest_sign_map_data';
-        const SIGN_MAP_PROJECTION_VERSION = 2;
+      // Store point data for click handlers
+      let currentPoints = [];
+      let currentPanoIds = [];
+      const SIGN_MAP_STORAGE_KEY = "parksight_latest_sign_map_data";
+      const SIGN_MAP_PROJECTION_VERSION = 2;
 
-        function normalizeSignMapStore(parsed) {
-            if (!parsed) {
-                return {
-                    savedAt: null,
-                    source: 'none',
-                    projectionVersion: SIGN_MAP_PROJECTION_VERSION,
-                    detections: []
-                };
-            }
-
-            if (parsed.projectionVersion !== SIGN_MAP_PROJECTION_VERSION) {
-                return {
-                    savedAt: null,
-                    source: 'none',
-                    projectionVersion: SIGN_MAP_PROJECTION_VERSION,
-                    detections: []
-                };
-            }
-
-            if (Array.isArray(parsed.detections)) {
-                return {
-                    savedAt: parsed.savedAt || null,
-                    source: parsed.source || 'unknown',
-                    projectionVersion: SIGN_MAP_PROJECTION_VERSION,
-                    detections: parsed.detections.filter(Boolean)
-                };
-            }
-
-            if (parsed.camera) {
-                return {
-                    savedAt: parsed.savedAt || null,
-                    source: parsed.source || 'unknown',
-                    projectionVersion: SIGN_MAP_PROJECTION_VERSION,
-                    detections: [parsed]
-                };
-            }
-
-            return {
-                savedAt: null,
-                source: 'unknown',
-                projectionVersion: SIGN_MAP_PROJECTION_VERSION,
-                detections: []
-            };
+      function normalizeSignMapStore(parsed) {
+        if (!parsed) {
+          return {
+            savedAt: null,
+            source: "none",
+            projectionVersion: SIGN_MAP_PROJECTION_VERSION,
+            detections: [],
+          };
         }
 
-        function getLatestSignMapData() {
-            const raw = localStorage.getItem(SIGN_MAP_STORAGE_KEY);
-            if (!raw) return normalizeSignMapStore(null);
-
-            try {
-                return normalizeSignMapStore(JSON.parse(raw));
-            } catch (err) {
-                console.error('Failed to parse persisted sign map data:', err);
-                return normalizeSignMapStore(null);
-            }
+        if (parsed.projectionVersion !== SIGN_MAP_PROJECTION_VERSION) {
+          return {
+            savedAt: null,
+            source: "none",
+            projectionVersion: SIGN_MAP_PROJECTION_VERSION,
+            detections: [],
+          };
         }
 
-        function persistLatestSignMapData(data) {
-            localStorage.setItem(SIGN_MAP_STORAGE_KEY, JSON.stringify(data));
+        if (Array.isArray(parsed.detections)) {
+          return {
+            savedAt: parsed.savedAt || null,
+            source: parsed.source || "unknown",
+            projectionVersion: SIGN_MAP_PROJECTION_VERSION,
+            detections: parsed.detections.filter(Boolean),
+          };
         }
 
-        function appendSignMapDetection(detectionEntry) {
-            const store = getLatestSignMapData();
-            const sameDetection = candidate => {
-                if (!candidate || !detectionEntry) return false;
-
-                if (candidate.panoId && detectionEntry.panoId) {
-                    return candidate.panoId === detectionEntry.panoId;
-                }
-
-                if (!candidate.camera || !detectionEntry.camera) {
-                    return false;
-                }
-
-                return (
-                    Math.abs(candidate.camera.lat - detectionEntry.camera.lat) < 1e-7 &&
-                    Math.abs(candidate.camera.lng - detectionEntry.camera.lng) < 1e-7
-                );
-            };
-
-            const nextStore = {
-                savedAt: Date.now(),
-                source: detectionEntry.source || store.source || 'ui-map',
-                projectionVersion: SIGN_MAP_PROJECTION_VERSION,
-                detections: [
-                    ...store.detections.filter(existing => !sameDetection(existing)),
-                    detectionEntry
-                ]
-            };
-            persistLatestSignMapData(nextStore);
-            return nextStore;
+        if (parsed.camera) {
+          return {
+            savedAt: parsed.savedAt || null,
+            source: parsed.source || "unknown",
+            projectionVersion: SIGN_MAP_PROJECTION_VERSION,
+            detections: [parsed],
+          };
         }
 
-        function updateMapDebug(data = null) {
-            const debugEl = document.getElementById('mapDebug');
-            if (!debugEl || !map) return;
+        return {
+          savedAt: null,
+          source: "unknown",
+          projectionVersion: SIGN_MAP_PROJECTION_VERSION,
+          detections: [],
+        };
+      }
 
-            const bounds = map.getBounds();
-            const center = map.getCenter();
-            const detections = data?.detections || [];
-            const signCount = detections.reduce((sum, detection) => sum + (detection.signs?.length || 0), 0);
-            const cameraCount = detections.length;
-            const source = data?.source || 'none';
-            const latestCamera = cameraCount > 0 && detections[cameraCount - 1]?.camera
-                ? `${detections[cameraCount - 1].camera.lat.toFixed(6)}, ${detections[cameraCount - 1].camera.lng.toFixed(6)}`
-                : 'none';
+      function getLatestSignMapData() {
+        const raw = localStorage.getItem(SIGN_MAP_STORAGE_KEY);
+        if (!raw) return normalizeSignMapStore(null);
 
-            debugEl.innerHTML =
-                `zoom=${map.getZoom()}<br>` +
-                `center=${center.lat.toFixed(6)}, ${center.lng.toFixed(6)}<br>` +
-                `north=${bounds.getNorth().toFixed(6)} south=${bounds.getSouth().toFixed(6)}<br>` +
-                `east=${bounds.getEast().toFixed(6)} west=${bounds.getWest().toFixed(6)}<br>` +
-                `saved source=${source} cameras=${cameraCount} signs=${signCount}<br>` +
-                `latest camera=${latestCamera}`;
+        try {
+          return normalizeSignMapStore(JSON.parse(raw));
+        } catch (err) {
+          console.error("Failed to parse persisted sign map data:", err);
+          return normalizeSignMapStore(null);
+        }
+      }
+
+      function persistLatestSignMapData(data) {
+        localStorage.setItem(SIGN_MAP_STORAGE_KEY, JSON.stringify(data));
+      }
+
+      function appendSignMapDetection(detectionEntry) {
+        const store = getLatestSignMapData();
+        const sameDetection = (candidate) => {
+          if (!candidate || !detectionEntry) return false;
+
+          if (candidate.panoId && detectionEntry.panoId) {
+            return candidate.panoId === detectionEntry.panoId;
+          }
+
+          if (!candidate.camera || !detectionEntry.camera) {
+            return false;
+          }
+
+          return (
+            Math.abs(candidate.camera.lat - detectionEntry.camera.lat) < 1e-7 &&
+            Math.abs(candidate.camera.lng - detectionEntry.camera.lng) < 1e-7
+          );
+        };
+
+        const nextStore = {
+          savedAt: Date.now(),
+          source: detectionEntry.source || store.source || "ui-map",
+          projectionVersion: SIGN_MAP_PROJECTION_VERSION,
+          detections: [
+            ...store.detections.filter((existing) => !sameDetection(existing)),
+            detectionEntry,
+          ],
+        };
+        persistLatestSignMapData(nextStore);
+        return nextStore;
+      }
+
+      function updateMapDebug(data = null) {
+        const debugEl = document.getElementById("mapDebug");
+        if (!debugEl || !map) return;
+
+        const bounds = map.getBounds();
+        const center = map.getCenter();
+        const detections = data?.detections || [];
+        const signCount = detections.reduce(
+          (sum, detection) => sum + (detection.signs?.length || 0),
+          0,
+        );
+        const cameraCount = detections.length;
+        const source = data?.source || "none";
+        const latestCamera =
+          cameraCount > 0 && detections[cameraCount - 1]?.camera
+            ? `${detections[cameraCount - 1].camera.lat.toFixed(6)}, ${detections[cameraCount - 1].camera.lng.toFixed(6)}`
+            : "none";
+
+        debugEl.innerHTML =
+          `zoom=${map.getZoom()}<br>` +
+          `center=${center.lat.toFixed(6)}, ${center.lng.toFixed(6)}<br>` +
+          `north=${bounds.getNorth().toFixed(6)} south=${bounds.getSouth().toFixed(6)}<br>` +
+          `east=${bounds.getEast().toFixed(6)} west=${bounds.getWest().toFixed(6)}<br>` +
+          `saved source=${source} cameras=${cameraCount} signs=${signCount}<br>` +
+          `latest camera=${latestCamera}`;
+      }
+
+      function renderSignMapData(data) {
+        signMarkersLayer.clearLayers();
+
+        const detections = data?.detections || [];
+        if (detections.length === 0) {
+          console.log("No persisted sign map data found");
+          updateMapDebug(data);
+          return;
         }
 
-        function renderSignMapData(data) {
-            signMarkersLayer.clearLayers();
+        console.log("Loaded sign map data on ui-map:", data);
+        streetViewDotsLayer.clearLayers();
 
-            const detections = data?.detections || [];
-            if (detections.length === 0) {
-                console.log('No persisted sign map data found');
-                updateMapDebug(data);
-                return;
-            }
+        const projectedMarkerRadius = 10 / 3;
+        const boundsPoints = [];
+        let totalSigns = 0;
 
-            console.log('Loaded sign map data on ui-map:', data);
-            streetViewDotsLayer.clearLayers();
+        detections.forEach((detection, detectionIndex) => {
+          if (!detection.camera) return;
 
-            const projectedMarkerRadius = 10 / 3;
-            const boundsPoints = [];
-            let totalSigns = 0;
+          const cameraCircle = L.circle(
+            [detection.camera.lat, detection.camera.lng],
+            {
+              radius: projectedMarkerRadius,
+              color: "#dc2626",
+              fillColor: "#ef4444",
+              weight: 2,
+              opacity: 0.95,
+              fillOpacity: 0.65,
+            },
+          ).addTo(signMarkersLayer);
 
-            detections.forEach((detection, detectionIndex) => {
-                if (!detection.camera) return;
+          const signCount = Array.isArray(detection.signs)
+            ? detection.signs.length
+            : 0;
+          totalSigns += signCount;
 
-                const cameraCircle = L.circle([detection.camera.lat, detection.camera.lng], {
-                    radius: projectedMarkerRadius,
-                    color: '#dc2626',
-                    fillColor: '#ef4444',
-                    weight: 2,
-                    opacity: 0.95,
-                    fillOpacity: 0.65
-                }).addTo(signMarkersLayer);
+          cameraCircle.bindPopup(
+            `<b>Panorama point</b><br>` +
+              `Run: ${detectionIndex + 1}<br>` +
+              `Pano: ${detection.panoId || "unknown"}<br>` +
+              `Projected signs: ${signCount}`,
+          );
 
-                const signCount = Array.isArray(detection.signs) ? detection.signs.length : 0;
-                totalSigns += signCount;
+          boundsPoints.push([detection.camera.lat, detection.camera.lng]);
 
-                cameraCircle.bindPopup(
-                    `<b>Panorama point</b><br>` +
-                    `Run: ${detectionIndex + 1}<br>` +
-                    `Pano: ${detection.panoId || 'unknown'}<br>` +
-                    `Projected signs: ${signCount}`
-                );
+          for (const sign of detection.signs || []) {
+            const signCircle = L.circle([sign.lat, sign.lng], {
+              radius: projectedMarkerRadius,
+              color: "#16a34a",
+              fillColor: "#22c55e",
+              weight: 2,
+              opacity: 0.95,
+              fillOpacity: 0.65,
+            }).addTo(signMarkersLayer);
 
-                boundsPoints.push([detection.camera.lat, detection.camera.lng]);
-
-                for (const sign of detection.signs || []) {
-                    const signCircle = L.circle([sign.lat, sign.lng], {
-                        radius: projectedMarkerRadius,
-                        color: '#16a34a',
-                        fillColor: '#22c55e',
-                        weight: 2,
-                        opacity: 0.95,
-                        fillOpacity: 0.65
-                    }).addTo(signMarkersLayer);
-
-                    signCircle.bindPopup(createSignPreviewPopupHtml(sign), {
-                        maxWidth: 220
-                    });
-                    signCircle.on('popupopen', (event) => {
-                        loadSignPreview(sign, event.popup);
-                    });
-
-                    boundsPoints.push([sign.lat, sign.lng]);
-                }
+            signCircle.bindPopup(createSignPreviewPopupHtml(sign), {
+              maxWidth: 220,
+            });
+            signCircle.on("popupopen", (event) => {
+              loadSignPreview(sign, event.popup);
             });
 
-            console.log(
-                `Rendered ${totalSigns} projected sign markers across ${detections.length} panorama detections from ${data.source || 'unknown source'}`
-            );
+            boundsPoints.push([sign.lat, sign.lng]);
+          }
+        });
 
-            if (boundsPoints.length > 0) {
-                map.fitBounds(boundsPoints, { padding: [60, 60], maxZoom: 19 });
-            }
+        console.log(
+          `Rendered ${totalSigns} projected sign markers across ${detections.length} panorama detections from ${data.source || "unknown source"}`,
+        );
 
-            updateMapDebug(data);
+        if (boundsPoints.length > 0) {
+          map.fitBounds(boundsPoints, { padding: [60, 60], maxZoom: 19 });
         }
 
-        function createSignPreviewPopupHtml(sign) {
-            const previewId = `sign-preview-${Math.random().toString(36).slice(2, 10)}`;
-            sign.previewContainerId = previewId;
+        updateMapDebug(data);
+      }
 
-            return `
+      function createSignPreviewPopupHtml(sign) {
+        const previewId = `sign-preview-${Math.random().toString(36).slice(2, 10)}`;
+        sign.previewContainerId = previewId;
+
+        return `
                 <div class="sign-preview-popup" id="${previewId}">
                     <div class="preview-loading">Loading sign preview...</div>
                 </div>
             `;
+      }
+
+      function renderSignPreviewContent(container, sign, state) {
+        if (state.error) {
+          container.innerHTML = `<div class="preview-error">${state.error}</div>`;
+          return;
         }
 
-        function renderSignPreviewContent(container, sign, state) {
-            if (state.error) {
-                container.innerHTML = `<div class="preview-error">${state.error}</div>`;
-                return;
-            }
+        if (!state.src) {
+          container.innerHTML = `<div class="preview-loading">Loading sign preview...</div>`;
+          return;
+        }
 
-            if (!state.src) {
-                container.innerHTML = `<div class="preview-loading">Loading sign preview...</div>`;
-                return;
-            }
-
-            container.innerHTML = `
+        container.innerHTML = `
                 <img src="${state.src}" alt="Detected parking sign preview">
             `;
+      }
+
+      async function loadSignPreview(sign, popup) {
+        const container = popup
+          ?.getElement()
+          ?.querySelector(`#${sign.previewContainerId}`);
+        if (!container) return;
+
+        renderSignPreviewContent(container, sign, {
+          src: sign.previewSrc || null,
+          error: sign.previewError || null,
+        });
+
+        if (sign.previewSrc || sign.previewError || sign.previewLoading) {
+          return;
         }
 
-        async function loadSignPreview(sign, popup) {
-            const container = popup?.getElement()?.querySelector(`#${sign.previewContainerId}`);
-            if (!container) return;
-
-            renderSignPreviewContent(container, sign, {
-                src: sign.previewSrc || null,
-                error: sign.previewError || null
-            });
-
-            if (sign.previewSrc || sign.previewError || sign.previewLoading) {
-                return;
-            }
-
-            if (!sign.panoId || !Number.isFinite(sign.heading) || !Number.isFinite(sign.pitch)) {
-                sign.previewError = 'Preview unavailable for this sign.';
-                renderSignPreviewContent(container, sign, { error: sign.previewError });
-                return;
-            }
-
-            sign.previewLoading = true;
-
-            try {
-                const preview = await fetchDetectionCropPreview({
-                    heading: sign.heading,
-                    pitch: sign.pitch,
-                    angularWidth: sign.angularWidth,
-                    angularHeight: sign.angularHeight,
-                    confidence: sign.confidence,
-                    class_name: sign.class_name || 'parking_sign'
-                }, sign.panoId);
-
-                sign.previewSrc = preview.src;
-                renderSignPreviewContent(container, sign, { src: sign.previewSrc });
-            } catch (err) {
-                console.error('Failed to load sign preview:', err);
-                sign.previewError = 'Preview unavailable.';
-                renderSignPreviewContent(container, sign, { error: sign.previewError });
-            } finally {
-                sign.previewLoading = false;
-            }
+        if (
+          !sign.panoId ||
+          !Number.isFinite(sign.heading) ||
+          !Number.isFinite(sign.pitch)
+        ) {
+          sign.previewError = "Preview unavailable for this sign.";
+          renderSignPreviewContent(container, sign, {
+            error: sign.previewError,
+          });
+          return;
         }
 
-        /**
-         * Initialize the application after Google Maps API loads.
-         */
-        function initApp() {
-            // Check API key
-            if (!window.GOOGLE_CONFIG?.API_KEY) {
-                showError('Google API key not configured. Please add it to config.js');
-                return;
-            }
+        sign.previewLoading = true;
 
-            // Initialize Leaflet map
-            map = L.map('map').setView([42.3615, -71.0921], 16);
+        try {
+          const preview = await fetchDetectionCropPreview(
+            {
+              heading: sign.heading,
+              pitch: sign.pitch,
+              angularWidth: sign.angularWidth,
+              angularHeight: sign.angularHeight,
+              confidence: sign.confidence,
+              class_name: sign.class_name || "parking_sign",
+            },
+            sign.panoId,
+          );
 
-            // Add tile layer
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '© OpenStreetMap contributors'
-            }).addTo(map);
+          sign.previewSrc = preview.src;
+          renderSignPreviewContent(container, sign, { src: sign.previewSrc });
+        } catch (err) {
+          console.error("Failed to load sign preview:", err);
+          sign.previewError = "Preview unavailable.";
+          renderSignPreviewContent(container, sign, {
+            error: sign.previewError,
+          });
+        } finally {
+          sign.previewLoading = false;
+        }
+      }
 
-            // Initialize layers
-            streetsLayer = L.layerGroup().addTo(map);
-            streetViewDotsLayer = L.layerGroup().addTo(map);
-            signMarkersLayer = L.layerGroup().addTo(map);
-            selectionLayer = L.layerGroup().addTo(map);
+      /**
+       * Initialize the application after Google Maps API loads.
+       */
+      function initApp() {
+        // Check API key
+        if (!window.GOOGLE_CONFIG?.API_KEY) {
+          showError(
+            "Google API key not configured. Please add it to config.js",
+          );
+          return;
+        }
 
-            // Set up event handlers
-            setupEventHandlers();
+        // Initialize Leaflet map
+        map = L.map("map").setView([42.3615, -71.0921], 16);
+
+        // Add tile layer
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "© OpenStreetMap contributors",
+        }).addTo(map);
+
+        // Initialize layers
+        streetsLayer = L.layerGroup().addTo(map);
+        streetViewDotsLayer = L.layerGroup().addTo(map);
+        signMarkersLayer = L.layerGroup().addTo(map);
+        selectionLayer = L.layerGroup().addTo(map);
+
+        // Set up event handlers
+        setupEventHandlers();
+        renderSignMapData(getLatestSignMapData());
+
+        window.addEventListener("storage", (event) => {
+          if (event.key === SIGN_MAP_STORAGE_KEY) {
             renderSignMapData(getLatestSignMapData());
+          }
+        });
 
-            window.addEventListener('storage', (event) => {
-                if (event.key === SIGN_MAP_STORAGE_KEY) {
-                    renderSignMapData(getLatestSignMapData());
-                }
-            });
+        map.on("moveend zoomend", () => {
+          updateMapDebug(getLatestSignMapData());
+          const bounds = map.getBounds();
+          console.log("Map viewport:", {
+            zoom: map.getZoom(),
+            center: map.getCenter(),
+            north: bounds.getNorth(),
+            south: bounds.getSouth(),
+            east: bounds.getEast(),
+            west: bounds.getWest(),
+          });
+        });
 
-            map.on('moveend zoomend', () => {
-                updateMapDebug(getLatestSignMapData());
-                const bounds = map.getBounds();
-                console.log('Map viewport:', {
-                    zoom: map.getZoom(),
-                    center: map.getCenter(),
-                    north: bounds.getNorth(),
-                    south: bounds.getSouth(),
-                    east: bounds.getEast(),
-                    west: bounds.getWest()
-                });
-            });
+        console.log("App initialized");
+        setTimeout(() => map.invalidateSize(), 0);
+        window.addEventListener("resize", () => map.invalidateSize());
+      }
 
-            console.log('App initialized');
-        }
+      /**
+       * Set up UI event handlers.
+       */
+      function setupEventHandlers() {
+        // Detection pane controls
+        document
+          .getElementById("redetectBtn")
+          .addEventListener("click", rerunDetection);
+        document
+          .getElementById("clearPanoramaBtn")
+          .addEventListener("click", clearPanoramaPane);
+        document
+          .getElementById("detectionSideToggle")
+          .addEventListener("change", updatePanoramaSide);
 
-        /**
-         * Set up UI event handlers.
-         */
-        function setupEventHandlers() {
-            // Close panorama modal
-            document.getElementById('closePanorama').addEventListener('click', closePanoramaModal);
-            document.getElementById('panoramaModal').addEventListener('click', (e) => {
-                if (e.target.id === 'panoramaModal') {
-                    closePanoramaModal();
-                }
-            });
+        // Hold Ctrl to enable selection mode
+        document.addEventListener("keydown", (e) => {
+          if (e.key === "Control" || e.ctrlKey) {
+            isSelecting = true;
+            map.getContainer().style.cursor = "crosshair";
+          }
+        });
 
-            // Detection modal controls
-            document.getElementById('closeDetection').addEventListener('click', closeDetectionModal);
-            document.getElementById('redetectBtn').addEventListener('click', rerunDetection);
-            document.getElementById('detectionModal').addEventListener('click', (e) => {
-                if (e.target.id === 'detectionModal') {
-                    closeDetectionModal();
-                }
-            });
-
-            // Escape key to close modals
-            document.addEventListener('keydown', (e) => {
-                if (e.key === 'Escape') {
-                    closePanoramaModal();
-                    closeDetectionModal();
-                }
-            });
-
-            // Hold Ctrl to enable selection mode
-            document.addEventListener('keydown', (e) => {
-                if (e.key === 'Control' || e.ctrlKey) {
-                    const detectionOpen = document.getElementById('detectionModal').classList.contains('visible');
-                    const panoramaOpen = document.getElementById('panoramaModal').classList.contains('visible');
-                    if (detectionOpen || panoramaOpen) return;
-                    isSelecting = true;
-                    map.getContainer().style.cursor = 'crosshair';
-                }
-            });
-
-            document.addEventListener('keyup', (e) => {
-                if (e.key === 'Control') {
-                    if (!isDrawingRect) {
-                        isSelecting = false;
-                        map.getContainer().style.cursor = '';
-                        map.dragging.enable();
-                        map.doubleClickZoom.enable();
-                    }
-                }
-            });
-
-            // Ctrl+Click shortcut for selection
-            map.on('mousedown', (e) => {
-                if (e.originalEvent.ctrlKey || e.originalEvent.metaKey) {
-                    e.originalEvent.preventDefault();
-                    startRectangleSelection(e.latlng);
-                }
-            });
-
-            // Regular selection mode mousedown
-            map.on('mousedown', (e) => {
-                if (!isSelecting || e.originalEvent.ctrlKey || e.originalEvent.metaKey) return;
-                L.DomEvent.preventDefault(e.originalEvent);
-                L.DomEvent.stopPropagation(e.originalEvent);
-                startRectangleSelection(e.latlng);
-            });
-
-            // Mouse move during selection
-            map.on('mousemove', (e) => {
-                if (!isDrawingRect || !selectionRect) return;
-                L.DomEvent.preventDefault(e.originalEvent);
-                L.DomEvent.stopPropagation(e.originalEvent);
-                const bounds = L.latLngBounds(selectionStart, e.latlng);
-                selectionRect.setBounds(bounds);
-            });
-
-            // Mouse up to complete selection
-            map.on('mouseup', async (e) => {
-                if (!isDrawingRect || !selectionRect) return;
-                L.DomEvent.preventDefault(e.originalEvent);
-                L.DomEvent.stopPropagation(e.originalEvent);
-
-                const bounds = selectionRect.getBounds();
-                selectionRect.remove();
-                selectionRect = null;
-                isDrawingRect = false;
-
-                // Re-enable map controls
-                map.getContainer().style.cursor = '';
-                map.dragging.enable();
-                map.doubleClickZoom.enable();
-
-                await onSelectionComplete(bounds);
-            });
-
-            // Click to cancel selection mode
-            map.on('click', () => {
-                if (isSelecting && !isDrawingRect) {
-                    isSelecting = false;
-                    map.getContainer().style.cursor = '';
-                    map.dragging.enable();
-                    map.doubleClickZoom.enable();
-                }
-            });
-        }
-
-        /**
-         * Start rectangle selection.
-         */
-        function startRectangleSelection(latlng) {
-            isSelecting = false;
-            isDrawingRect = true;
-            selectionStart = latlng;
-            map.getContainer().style.cursor = 'crosshair';
-            map.dragging.disable();
-            map.doubleClickZoom.disable();
-
-            selectionRect = L.rectangle(
-                [[latlng.lat, latlng.lng], [latlng.lat, latlng.lng]],
-                { color: '#007bff', weight: 2, fillOpacity: 0.1, dashArray: '5, 5' }
-            ).addTo(selectionLayer);
-        }
-
-        /**
-         * Handle completed area selection.
-         */
-        async function onSelectionComplete(bounds) {
-            try {
-                // Clear previous results
-                streetViewDotsLayer.clearLayers();
-                currentPoints = [];
-                currentPanoIds = [];
-
-                // Step 1: Fetch streets
-                showProgress('Fetching streets...');
-                const rawStreets = await fetchStreets(bounds);
-
-                if (rawStreets.length === 0) {
-                    showProgress('No streets found in selected area', false);
-                    setTimeout(hideProgress, 2000);
-                    return;
-                }
-
-                // Clip streets to selection bounds
-                const streets = clipStreetsToBounds(rawStreets, bounds);
-
-                // Display streets on map
-                displayStreets(streets);
-
-                // Step 2: Sample points along streets
-                showProgress(`Found ${streets.length} streets. Sampling viewpoints...`);
-                const allPoints = streets.flatMap(s => sampleStreetPoints(s, 50));
-
-                if (allPoints.length === 0) {
-                    showProgress('No viewpoints generated', false);
-                    setTimeout(hideProgress, 2000);
-                    return;
-                }
-
-                // Step 3: Get session token
-                showProgress(`Checking Street View coverage for ${allPoints.length} points...`);
-                let session;
-                try {
-                    session = await getSessionToken();
-                } catch (err) {
-                    showError(`Session error: ${err.message}`);
-                    hideProgress();
-                    return;
-                }
-
-                // Step 4: Batch fetch panoIds
-                const panoIds = [];
-                const BATCH_SIZE = 100;
-
-                for (let i = 0; i < allPoints.length; i += BATCH_SIZE) {
-                    const batch = allPoints.slice(i, i + BATCH_SIZE);
-                    updateProgress(
-                        Math.round((i / allPoints.length) * 100),
-                        `Checking batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(allPoints.length / BATCH_SIZE)}...`
-                    );
-
-                    try {
-                        const ids = await fetchPanoIds(batch, session);
-                        panoIds.push(...ids);
-                    } catch (err) {
-                        console.error('Batch fetch error:', err);
-                        showError(`Coverage check failed: ${err.message}`);
-                        hideProgress();
-                        return;
-                    }
-
-                    // Small delay between batches to avoid rate limiting
-                    await new Promise(resolve => setTimeout(resolve, 50));
-                }
-
-                // Step 5: Filter to points with coverage
-                const coveredPoints = [];
-                const coveredPanoIds = [];
-
-                for (let i = 0; i < allPoints.length; i++) {
-                    if (panoIds[i] && panoIds[i] !== '') {
-                        coveredPoints.push(allPoints[i]);
-                        coveredPanoIds.push(panoIds[i]);
-                    }
-                }
-
-                if (coveredPoints.length === 0) {
-                    showProgress('No Street View coverage in selected area', false);
-                    setTimeout(hideProgress, 2000);
-                    return;
-                }
-
-                // Step 6: Display dots
-                currentPoints = coveredPoints;
-                currentPanoIds = coveredPanoIds;
-                displayDots(coveredPoints, coveredPanoIds);
-
-                showProgress('Complete!', false);
-                updateProgress(100, `Found ${coveredPoints.length} Street View locations`);
-                setTimeout(hideProgress, 2000);
-
-            } catch (err) {
-                console.error('Selection error:', err);
-                let msg = err.message;
-                if (msg.includes('504')) {
-                    msg = 'Selection too narrow. Try selecting a larger area.';
-                }
-                showError(msg);
-                hideProgress();
+        document.addEventListener("keyup", (e) => {
+          if (e.key === "Control") {
+            if (!isDrawingRect) {
+              isSelecting = false;
+              map.getContainer().style.cursor = "";
+              map.dragging.enable();
+              map.doubleClickZoom.enable();
             }
+          }
+        });
+
+        // Ctrl+Click shortcut for selection
+        map.on("mousedown", (e) => {
+          if (e.originalEvent.ctrlKey || e.originalEvent.metaKey) {
+            e.originalEvent.preventDefault();
+            startRectangleSelection(e.latlng);
+          }
+        });
+
+        // Regular selection mode mousedown
+        map.on("mousedown", (e) => {
+          if (
+            !isSelecting ||
+            e.originalEvent.ctrlKey ||
+            e.originalEvent.metaKey
+          )
+            return;
+          L.DomEvent.preventDefault(e.originalEvent);
+          L.DomEvent.stopPropagation(e.originalEvent);
+          startRectangleSelection(e.latlng);
+        });
+
+        // Mouse move during selection
+        map.on("mousemove", (e) => {
+          if (!isDrawingRect || !selectionRect) return;
+          L.DomEvent.preventDefault(e.originalEvent);
+          L.DomEvent.stopPropagation(e.originalEvent);
+          const bounds = L.latLngBounds(selectionStart, e.latlng);
+          selectionRect.setBounds(bounds);
+        });
+
+        // Mouse up to complete selection
+        map.on("mouseup", async (e) => {
+          if (!isDrawingRect || !selectionRect) return;
+          L.DomEvent.preventDefault(e.originalEvent);
+          L.DomEvent.stopPropagation(e.originalEvent);
+
+          const bounds = selectionRect.getBounds();
+          selectionRect.remove();
+          selectionRect = null;
+          isDrawingRect = false;
+
+          // Re-enable map controls
+          map.getContainer().style.cursor = "";
+          map.dragging.enable();
+          map.doubleClickZoom.enable();
+
+          await onSelectionComplete(bounds);
+        });
+
+        // Click to cancel selection mode
+        map.on("click", () => {
+          if (isSelecting && !isDrawingRect) {
+            isSelecting = false;
+            map.getContainer().style.cursor = "";
+            map.dragging.enable();
+            map.doubleClickZoom.enable();
+          }
+        });
+      }
+
+      /**
+       * Start rectangle selection.
+       */
+      function startRectangleSelection(latlng) {
+        isSelecting = false;
+        isDrawingRect = true;
+        selectionStart = latlng;
+        map.getContainer().style.cursor = "crosshair";
+        map.dragging.disable();
+        map.doubleClickZoom.disable();
+
+        selectionRect = L.rectangle(
+          [
+            [latlng.lat, latlng.lng],
+            [latlng.lat, latlng.lng],
+          ],
+          { color: "#007bff", weight: 2, fillOpacity: 0.1, dashArray: "5, 5" },
+        ).addTo(selectionLayer);
+      }
+
+      /**
+       * Handle completed area selection.
+       */
+      async function onSelectionComplete(bounds) {
+        try {
+          // Clear previous results
+          streetViewDotsLayer.clearLayers();
+          currentPoints = [];
+          currentPanoIds = [];
+
+          // Step 1: Fetch streets
+          showProgress("Fetching streets...");
+          const rawStreets = await fetchStreets(bounds);
+
+          if (rawStreets.length === 0) {
+            showProgress("No streets found in selected area", false);
+            setTimeout(hideProgress, 2000);
+            return;
+          }
+
+          // Clip streets to selection bounds
+          const streets = clipStreetsToBounds(rawStreets, bounds);
+
+          // Display streets on map
+          displayStreets(streets);
+
+          // Step 2: Sample points along streets
+          showProgress(
+            `Found ${streets.length} streets. Sampling viewpoints...`,
+          );
+          const allPoints = streets.flatMap((s) => sampleStreetPoints(s, 50));
+
+          if (allPoints.length === 0) {
+            showProgress("No viewpoints generated", false);
+            setTimeout(hideProgress, 2000);
+            return;
+          }
+
+          // Step 3: Get session token
+          showProgress(
+            `Checking Street View coverage for ${allPoints.length} points...`,
+          );
+          let session;
+          try {
+            session = await getSessionToken();
+          } catch (err) {
+            showError(`Session error: ${err.message}`);
+            hideProgress();
+            return;
+          }
+
+          // Step 4: Batch fetch panoIds
+          const panoIds = [];
+          const BATCH_SIZE = 100;
+
+          for (let i = 0; i < allPoints.length; i += BATCH_SIZE) {
+            const batch = allPoints.slice(i, i + BATCH_SIZE);
+            updateProgress(
+              Math.round((i / allPoints.length) * 100),
+              `Checking batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(allPoints.length / BATCH_SIZE)}...`,
+            );
+
+            try {
+              const ids = await fetchPanoIds(batch, session);
+              panoIds.push(...ids);
+            } catch (err) {
+              console.error("Batch fetch error:", err);
+              showError(`Coverage check failed: ${err.message}`);
+              hideProgress();
+              return;
+            }
+
+            // Small delay between batches to avoid rate limiting
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+
+          // Step 5: Filter to points with coverage
+          const coveredPoints = [];
+          const coveredPanoIds = [];
+
+          for (let i = 0; i < allPoints.length; i++) {
+            if (panoIds[i] && panoIds[i] !== "") {
+              coveredPoints.push(allPoints[i]);
+              coveredPanoIds.push(panoIds[i]);
+            }
+          }
+
+          if (coveredPoints.length === 0) {
+            showProgress("No Street View coverage in selected area", false);
+            setTimeout(hideProgress, 2000);
+            return;
+          }
+
+          // Step 6: Display dots
+          currentPoints = coveredPoints;
+          currentPanoIds = coveredPanoIds;
+          displayDots(coveredPoints, coveredPanoIds);
+
+          showProgress("Complete!", false);
+          updateProgress(
+            100,
+            `Found ${coveredPoints.length} Street View locations`,
+          );
+          setTimeout(hideProgress, 2000);
+        } catch (err) {
+          console.error("Selection error:", err);
+          let msg = err.message;
+          if (msg.includes("504")) {
+            msg = "Selection too narrow. Try selecting a larger area.";
+          }
+          showError(msg);
+          hideProgress();
         }
+      }
 
-        /**
-         * Display streets on the map.
-         */
-        function displayStreets(streets) {
-            const geojson = waysToGeoJSON(streets);
+      /**
+       * Display streets on the map.
+       */
+      function displayStreets(streets) {
+        const geojson = waysToGeoJSON(streets);
 
-            L.geoJSON(geojson, {
-                style: {
-                    color: '#333',
-                    weight: 3,
-                    opacity: 0.7
-                },
-                onEachFeature: (feature, layer) => {
-                    const name = feature.properties.name;
-                    const type = feature.properties.highway;
-                    const oneway = feature.properties.oneway;
-                    layer.bindPopup(`
+        L.geoJSON(geojson, {
+          style: {
+            color: "#333",
+            weight: 3,
+            opacity: 0.7,
+          },
+          onEachFeature: (feature, layer) => {
+            const name = feature.properties.name;
+            const type = feature.properties.highway;
+            const oneway = feature.properties.oneway;
+            layer.bindPopup(`
                         <strong>${name}</strong><br>
                         Type: ${type}<br>
-                        ${oneway ? `One-way: ${oneway}` : 'Two-way'}
+                        ${oneway ? `One-way: ${oneway}` : "Two-way"}
                     `);
-                }
-            }).addTo(streetsLayer);
+          },
+        }).addTo(streetsLayer);
+      }
+
+      /**
+       * Display Street View coverage dots.
+       */
+      function displayDots(points, panoIds) {
+        for (let i = 0; i < points.length; i++) {
+          const point = points[i];
+          const panoId = panoIds[i];
+
+          const dot = L.circleMarker([point.lat, point.lon], {
+            radius: 6,
+            fillColor: "#4285f4",
+            color: "#1a73e8",
+            weight: 2,
+            opacity: 0.9,
+            fillOpacity: 0.7,
+          }).addTo(streetViewDotsLayer);
+
+          // Store index for click handler
+          dot.pointIndex = i;
+
+          dot.on("click", () => onDotClick(i));
+
+          // Tooltip with street name
+          dot.bindTooltip(point.streetName, {
+            permanent: false,
+            direction: "top",
+          });
         }
+      }
 
-        /**
-         * Display Street View coverage dots.
-         */
-        function displayDots(points, panoIds) {
-            for (let i = 0; i < points.length; i++) {
-                const point = points[i];
-                const panoId = panoIds[i];
+      // Store current detection context
+      let currentDetectionContext = null;
 
-                const dot = L.circleMarker([point.lat, point.lon], {
-                    radius: 6,
-                    fillColor: '#4285f4',
-                    color: '#1a73e8',
-                    weight: 2,
-                    opacity: 0.9,
-                    fillOpacity: 0.7
-                }).addTo(streetViewDotsLayer);
+      /**
+       * Handle dot click - run detection and show results.
+       */
+      async function onDotClick(index) {
+        await showDetectionForIndex(index);
+      }
 
-                // Store index for click handler
-                dot.pointIndex = i;
+      /**
+       * Show detection for a given point index.
+       */
+      async function showDetectionForIndex(index) {
+        const point = currentPoints[index];
+        const panoId = currentPanoIds[index];
 
-                dot.on('click', () => onDotClick(i));
+        if (!point || !panoId) return;
 
-                // Tooltip with street name
-                dot.bindTooltip(point.streetName, {
-                    permanent: false,
-                    direction: 'top'
-                });
-            }
-        }
+        const side = document.getElementById("detectionSideToggle").value;
+        // Add 180° to look at the opposite side of the street
+        const heading =
+          (calculateHeadingWithSide(point.bearing, side, point.oneway) + 180) %
+          360;
 
-        // Store current detection context
-        let currentDetectionContext = null;
+        // Store context for detection (pointIndex for position fallback)
+        currentDetectionContext = {
+          panoId,
+          heading,
+          pointIndex: index,
+          side,
+          streetBearing: point.bearing,
+          oneway: point.oneway || null,
+          streetName: point.streetName || "Unknown street",
+        };
 
-        /**
-         * Handle dot click - run detection and show results.
-         */
-        async function onDotClick(index) {
-            await showDetectionForIndex(index);
-        }
+        const statusEl = document.getElementById("detectionStatus");
+        const infoEl = document.getElementById("detectionInfo");
+        const emptyStateEl = document.getElementById("emptyPanoramaState");
 
-        /**
-         * Show detection for a given point index.
-         */
-        async function showDetectionForIndex(index) {
-            const point = currentPoints[index];
-            const panoId = currentPanoIds[index];
+        document.getElementById("detectionSideToggle").value = side;
 
-            if (!point || !panoId) return;
+        emptyStateEl.classList.add("hidden");
+        statusEl.textContent = "Loading panorama...";
 
-            const side = document.getElementById('detectionSideToggle').value;
-            // Add 180° to look at the opposite side of the street
-            const heading = (calculateHeadingWithSide(point.bearing, side, point.oneway) + 180) % 360;
+        const streetName = point.streetName || "Unknown street";
+        infoEl.textContent = `${streetName} • Heading: ${Math.round(heading)}°`;
 
-            // Store context for detection (pointIndex for position fallback)
-            currentDetectionContext = {
-                panoId,
-                heading,
-                pointIndex: index,
-                side,
-                streetBearing: point.bearing,
-                oneway: point.oneway || null,
-                streetName: point.streetName || 'Unknown street'
-            };
+        // Initialize panorama
+        const container = document.getElementById("detectionPanorama");
+        initDetectionPanorama(panoId, heading, container);
 
-            // Show detection modal
-            const modal = document.getElementById('detectionModal');
-            const statusEl = document.getElementById('detectionStatus');
-            const infoEl = document.getElementById('detectionInfo');
+        // Update status - no auto-detection, user clicks Re-detect
+        statusEl.textContent = `Click "Detect" to scan (heading: ${Math.round(heading)}°, v2)`;
+      }
 
-            // Sync side toggle to detection modal
-            document.getElementById('detectionSideToggle').value = side;
+      /**
+       * Re-run detection at current panorama POV (visible area only).
+       */
+      async function rerunDetection() {
+        if (!currentDetectionContext || !detectionPanorama) return;
 
-            modal.classList.add('visible');
-            statusEl.textContent = 'Loading panorama...';
+        const { panoId } = currentDetectionContext;
+        const statusEl = document.getElementById("detectionStatus");
+        const useSahi = document.getElementById("detectMode").value === "sahi";
+        currentDetectionContext.side = document.getElementById(
+          "detectionSideToggle",
+        ).value;
 
-            const streetName = point.streetName || 'Unknown street';
-            infoEl.textContent = `${streetName} • Heading: ${Math.round(heading)}°`;
+        try {
+          // Use current POV (heading, pitch, zoom/FOV) for detection
+          await runDetectionOnPanorama(panoId, null, statusEl, true, useSahi);
 
-            // Initialize panorama
-            const container = document.getElementById('detectionPanorama');
-            initDetectionPanorama(panoId, heading, container);
-
-            // Update status - no auto-detection, user clicks Re-detect
-            statusEl.textContent = `Click "Detect" to scan (heading: ${Math.round(heading)}°, v2)`;
-        }
-
-        /**
-         * Re-run detection at current panorama POV (visible area only).
-         */
-        async function rerunDetection() {
-            if (!currentDetectionContext || !detectionPanorama) return;
-
-            const { panoId } = currentDetectionContext;
-            const statusEl = document.getElementById('detectionStatus');
-            const useSahi = document.getElementById('detectMode').value === 'sahi';
-            currentDetectionContext.side = document.getElementById('detectionSideToggle').value;
-
+          // Project detected signs onto the map
+          console.log(
+            `rerunDetection: ${currentDetections.length} detections found, signMarkersLayer exists: ${!!signMarkersLayer}`,
+          );
+          console.log("=== DETECTION COMPLETE ===");
+          currentDetections.forEach((det, i) => {
+            console.log(
+              `  Detection ${i}: heading=${det.heading.toFixed(1)}° pitch=${det.pitch.toFixed(1)}° conf=${det.confidence.toFixed(2)}`,
+            );
+          });
+          if (currentDetections.length > 0) {
             try {
-                // Use current POV (heading, pitch, zoom/FOV) for detection
-                const result = await runDetectionOnPanorama(panoId, null, statusEl, true, useSahi);
-
-                // Project detected signs onto the map
-                console.log(`rerunDetection: ${currentDetections.length} detections found, signMarkersLayer exists: ${!!signMarkersLayer}`);
-                console.log('=== DETECTION COMPLETE ===');
-                currentDetections.forEach((det, i) => {
-                    console.log(`  Detection ${i}: heading=${det.heading.toFixed(1)}° pitch=${det.pitch.toFixed(1)}° conf=${det.confidence.toFixed(2)}`);
-                });
-                if (currentDetections.length > 0) {
-                    try {
-                        plotDetectedSigns();
-                    } catch (plotErr) {
-                        console.error('plotDetectedSigns error:', plotErr);
-                    }
-                } else {
-                    console.log('No detections to plot');
-                }
-            } catch (err) {
-                console.error('Re-detection failed:', err);
-                statusEl.textContent = 'Detection failed.';
+              plotDetectedSigns();
+            } catch (plotErr) {
+              console.error("plotDetectedSigns error:", plotErr);
             }
+          } else {
+            console.log("No detections to plot");
+          }
+        } catch (err) {
+          console.error("Re-detection failed:", err);
+          statusEl.textContent = "Detection failed.";
+        }
+      }
+
+      /**
+       * Plot the current panorama point and projected sign locations on the map.
+       */
+      function plotDetectedSigns() {
+        if (currentDetections.length === 0 || !currentDetectionContext) {
+          console.warn("plotDetectedSigns: nothing to render");
+          return;
         }
 
-        /**
-         * Plot the current panorama point and projected sign locations on the map.
-         */
-        function plotDetectedSigns() {
-            if (currentDetections.length === 0 || !currentDetectionContext) {
-                console.warn('plotDetectedSigns: nothing to render');
-                return;
-            }
-
-            const idx = currentDetectionContext?.pointIndex;
-            if (idx == null || !currentPoints[idx]) {
-                console.error('plotDetectedSigns: no pointIndex in context');
-                return;
-            }
-            const cameraLat = currentPoints[idx].lat;
-            const cameraLng = currentPoints[idx].lon;
-            const signLocations = estimateAllSignLocations(cameraLat, cameraLng, {
-                streetBearing: currentDetectionContext.streetBearing,
-                oneway: currentDetectionContext.oneway,
-                side: currentDetectionContext.side
-            });
-            const detectionEntry = {
-                savedAt: Date.now(),
-                source: 'ui-map',
-                panoId: currentDetectionContext.panoId,
-                camera: {
-                    lat: cameraLat,
-                    lng: cameraLng
-                },
-                streetName: currentDetectionContext.streetName,
-                signs: signLocations
-            };
-
-            const store = appendSignMapDetection(detectionEntry);
-            renderSignMapData(store);
+        const idx = currentDetectionContext?.pointIndex;
+        if (idx == null || !currentPoints[idx]) {
+          console.error("plotDetectedSigns: no pointIndex in context");
+          return;
         }
+        const cameraLat = currentPoints[idx].lat;
+        const cameraLng = currentPoints[idx].lon;
+        const signLocations = estimateAllSignLocations(cameraLat, cameraLng, {
+          streetBearing: currentDetectionContext.streetBearing,
+          oneway: currentDetectionContext.oneway,
+          side: currentDetectionContext.side,
+        });
+        const detectionEntry = {
+          savedAt: Date.now(),
+          source: "ui-map",
+          panoId: currentDetectionContext.panoId,
+          camera: {
+            lat: cameraLat,
+            lng: cameraLng,
+          },
+          streetName: currentDetectionContext.streetName,
+          signs: signLocations,
+        };
 
-        /**
-         * Close detection modal.
-         */
-        function closeDetectionModal() {
-            document.getElementById('detectionModal').classList.remove('visible');
-            cleanupDetectionPanorama();
-            currentDetectionContext = null;
-        }
+        const store = appendSignMapDetection(detectionEntry);
+        renderSignMapData(store);
+      }
 
-        /**
-         * Close panorama modal.
-         */
-        function closePanoramaModal() {
-            document.getElementById('panoramaModal').classList.remove('visible');
-        }
+      function updatePanoramaSide() {
+        if (!currentDetectionContext) return;
+
+        currentDetectionContext.side = document.getElementById(
+          "detectionSideToggle",
+        ).value;
+        const point = currentPoints[currentDetectionContext.pointIndex];
+        if (!point || !currentDetectionContext.panoId) return;
+
+        const heading =
+          (calculateHeadingWithSide(
+            point.bearing,
+            currentDetectionContext.side,
+            point.oneway,
+          ) +
+            180) %
+          360;
+        currentDetectionContext.heading = heading;
+        document.getElementById("detectionInfo").textContent =
+          `${currentDetectionContext.streetName} • Heading: ${Math.round(heading)}°`;
+        initDetectionPanorama(
+          currentDetectionContext.panoId,
+          heading,
+          document.getElementById("detectionPanorama"),
+        );
+        document.getElementById("detectionStatus").textContent =
+          `Click "Detect" to scan (heading: ${Math.round(heading)}°, v2)`;
+      }
+
+      function clearPanoramaPane() {
+        cleanupDetectionPanorama();
+        currentDetectionContext = null;
+        document
+          .getElementById("emptyPanoramaState")
+          .classList.remove("hidden");
+        document.getElementById("detectionInfo").textContent = "";
+        document.getElementById("detectionStatus").textContent =
+          "Select a Street View point on the map.";
+      }
     </script>
-</body>
+  </body>
 </html>
