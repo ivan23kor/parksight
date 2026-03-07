@@ -5,7 +5,11 @@
   "scripts": {
     "build": "cd ui-upload && bun install && bun run build",
     "serve": "node serve.js",
-    "start": "npm run build && npm run serve"
+    "start:web": "node serve.js",
+    "start:backend": "bash ./scripts/start-backend.sh",
+    "start": "bash ./scripts/start-stack.sh",
+    "test:e2e": "bunx playwright test",
+    "test:e2e:headed": "bunx playwright test --headed"
   },
   "keywords": [
     "parking",
@@ -14,5 +18,8 @@
     "street-view"
   ],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@playwright/test": "^1.52.0"
+  }
 }
