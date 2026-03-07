@@ -270,6 +270,30 @@ function perpendicularDistanceMeters(point, segment) {
 }
 
 test.describe("ui-map detection flow", () => {
+  test("builds preview crops with 25% extra vertical margin above and below the sign", async ({
+    page,
+  }) => {
+    await mockExternalDependencies(page);
+    await page.goto("/ui-map/?api_key=test-key");
+
+    const cropPlan = await page.evaluate(async () => {
+      return await buildDetectionCropPlan(
+        {
+          heading: 45,
+          pitch: -2,
+          angularWidth: 0.5,
+          angularHeight: 1,
+          confidence: 0.91,
+          class_name: "parking_sign",
+        },
+        "mock-pano",
+      );
+    });
+
+    const expectedCropHeight = Math.round((8192 / 180) * 1 * 1.5);
+    expect(cropPlan.requestBody.crop_height).toBe(expectedCropHeight);
+  });
+
   test("fails hard when SAHI detection is unavailable", async ({
     page,
   }) => {
