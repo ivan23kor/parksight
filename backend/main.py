@@ -505,20 +505,13 @@ async def preview_sign(request: SignPreviewRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to decode sign preview: {e}")
 
-    crop_width_ratio = min(max(request.crop_width_ratio, 0.05), 1.0)
-    crop_height_ratio = min(max(request.crop_height_ratio, 0.05), 1.0)
-    crop_width = max(1, round(image.width * crop_width_ratio))
-    crop_height = max(1, round(image.height * crop_height_ratio))
-    crop_left = max(0, (image.width - crop_width) // 2)
-    crop_top = max(0, (image.height - crop_height) // 2)
-    image = image.crop(
-        (
-            crop_left,
-            crop_top,
-            crop_left + crop_width,
-            crop_top + crop_height,
-        )
-    )
+    width_ratio = min(max(request.crop_width_ratio, 0.05), 1.0)
+    height_ratio = min(max(request.crop_height_ratio, 0.05), 1.0)
+    crop_left = max(0, (image.width * (1 - width_ratio)) // 2)
+    crop_right = min(image.width, (image.width * (1 + width_ratio) + 1) // 2)
+    crop_top = max(0, (image.height * (1 - height_ratio)) // 2)
+    crop_bottom = min(image.height, (image.height * (1 + height_ratio) + 1) // 2)
+    image = image.crop((crop_left, crop_top, crop_right, crop_bottom))
 
     filename = None
     if request.save:
