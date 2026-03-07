@@ -800,7 +800,7 @@
         return best;
       }
 
-      async function refinePreviewViewWithSahi(sign, previewView) {
+      async function refinePreviewViewWithPanoramaDetection(sign, previewView) {
         if (sign.previewRefinedView?.panoId && sign.previewRefinedView?.detection) {
           return sign.previewRefinedView;
         }
@@ -821,7 +821,7 @@
             PREVIEW_REFINEMENT_FOV_MIN,
             PREVIEW_REFINEMENT_FOV_MAX,
           );
-          const result = await runSahiDetection(
+          const result = await runPanoramaDetection(
             previewView.panoId,
             targetDetection.heading,
             targetDetection.pitch,
@@ -908,7 +908,10 @@
             renderSignPreviewContent(container, sign, { src: sign.previewSrc });
           }
 
-          const refinedView = await refinePreviewViewWithSahi(sign, previewView);
+          const refinedView = await refinePreviewViewWithPanoramaDetection(
+            sign,
+            previewView,
+          );
           if (refinedView?.panoId && refinedView?.detection) {
             const refinedPreview = await fetchDetectionCropPreview(
               refinedView.detection,

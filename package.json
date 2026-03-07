@@ -5,7 +5,8 @@
   "scripts": {
     "build": "cd ui-upload && bun install && bun run build",
     "serve": "node serve.js",
-    "start:web": "node serve.js",
+    "serve:static": "node serve.js",
+    "start:web": "bash ./scripts/start-stack.sh",
     "start:backend": "bash ./scripts/start-backend.sh",
     "start": "bash ./scripts/start-stack.sh",
     "test:e2e": "bunx playwright test",

@@ -1164,10 +1164,10 @@ function clearDetections() {
 }
 
 /**
- * Run SAHI (Slicing Aided Hyper Inference) detection via backend.
- * Slices the panorama into overlapping zoomed windows for better small-sign detection.
+ * Run the backend's panorama detection pipeline.
+ * The backend may use multi-slice inference internally.
  */
-async function runSahiDetection(panoId, heading, pitch, fov, statusEl) {
+async function runPanoramaDetection(panoId, heading, pitch, fov, statusEl) {
   const apiUrl = window.DETECTION_CONFIG?.API_URL;
   const apiKey = window.GOOGLE_CONFIG?.API_KEY;
   if (!apiUrl || !apiKey) {
@@ -1180,11 +1180,11 @@ async function runSahiDetection(panoId, heading, pitch, fov, statusEl) {
   const sliceFov = Math.min(45, fov / 2);
 
   if (statusEl)
-    statusEl.textContent = `SAHI: scanning with ${sliceFov.toFixed(0)}° slices...`;
+    statusEl.textContent = `Detecting parking signs across ${sliceFov.toFixed(0)}° slices...`;
 
   let resp;
   try {
-    resp = await fetch(`${apiUrl}/detect-sahi`, {
+    resp = await fetch(`${apiUrl}/detect-panorama`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1202,28 +1202,57 @@ async function runSahiDetection(panoId, heading, pitch, fov, statusEl) {
       }),
     });
   } catch (err) {
-    console.error("SAHI request failed:", err);
+    console.error("Panorama detection request failed:", err);
     throw new Error(`Can't reach detection API. Make sure backend is running.`);
   }
 
   if (!resp.ok) {
     const errorText = await resp.text();
-    throw new Error(`SAHI detection failed: ${resp.status} - ${errorText}`);
+    throw new Error(`Panorama detection failed: ${resp.status} - ${errorText}`);
   }
 
   return resp.json();
 }
 
+async function runSingleViewPanoramaDetection(
+  panoId,
+  heading,
+  pitch,
+  fov,
+  imgWidth,
+  imgHeight,
+) {
+  const imageUrl = getStreetViewImageUrl(
+    panoId,
+    heading,
+    pitch,
+    fov,
+    imgWidth,
+    imgHeight,
+  );
+  const result = await runDetection(imageUrl);
+
+  return {
+    detections: clusterAngularDetections(
+      result.detections.map((det) =>
+        detectionToAngular(det, heading, pitch, fov, imgWidth, imgHeight),
+      ),
+    ),
+    total_inference_time_ms: result.inference_time_ms,
+    slices_count: 1,
+  };
+}
+
 /**
  * Run detection and display results on panorama.
- * @param {boolean} useSahi - Use SAHI for better small-sign detection
+ * @param {boolean} preferPanoramaDetection - Prefer the backend's multi-slice panorama detector
  */
 async function runDetectionOnPanorama(
   panoId,
   heading,
   statusEl,
   useCurrentPov = false,
-  useSahi = true,
+  preferPanoramaDetection = true,
 ) {
   let fov = 90;
   let pitch = PANORAMA_DEFAULTS.pitch;
@@ -1257,46 +1286,74 @@ async function runDetectionOnPanorama(
     }
   }
 
-  if (statusEl)
-    statusEl.textContent = useSahi
-      ? "SAHI: detecting parking signs..."
-      : "Detecting parking signs...";
+  if (statusEl) statusEl.textContent = "Detecting parking signs...";
 
   try {
-    if (!useSahi) {
-      throw new Error("Standard detection is disabled; use SAHI detection.");
+    let result = null;
+    let detectionMode = "single-view";
+
+    if (preferPanoramaDetection) {
+      try {
+        result = await runPanoramaDetection(
+          detectPanoId,
+          detectHeading,
+          pitch,
+          fov,
+          statusEl,
+        );
+        detectionMode = "multi-slice";
+      } catch (err) {
+        console.warn(
+          "Panorama detection unavailable, falling back to single-view detection:",
+          err,
+        );
+        if (statusEl) {
+          statusEl.textContent =
+            "Panorama detector unavailable. Falling back to single-view detection...";
+        }
+      }
     }
 
-    const result = await runSahiDetection(
-      detectPanoId,
-      detectHeading,
-      pitch,
-      fov,
-      statusEl,
-    );
+    if (!result) {
+      result = await runSingleViewPanoramaDetection(
+        detectPanoId,
+        detectHeading,
+        pitch,
+        fov,
+        imgWidth,
+        imgHeight,
+      );
+      detectionMode = "single-view";
+    }
 
-    // SAHI returns angular detections directly.
-    currentDetections = clusterAngularDetections(
-      result.detections.map((det) => ({
-        heading: det.heading,
-        pitch: det.pitch,
-        angularWidth: det.angular_width,
-        angularHeight: det.angular_height,
-        confidence: det.confidence,
-        class_name: det.class_name,
-      })),
-    );
+    currentDetections =
+      detectionMode === "multi-slice"
+        ? clusterAngularDetections(
+            result.detections.map((det) => ({
+              heading: det.heading,
+              pitch: det.pitch,
+              angularWidth: det.angular_width,
+              angularHeight: det.angular_height,
+              confidence: det.confidence,
+              class_name: det.class_name,
+            })),
+          )
+        : result.detections;
 
     detectionPov = { heading: detectHeading, pitch, fov };
     updateDetectionOverlay();
 
     const count = currentDetections.length;
     const timeMs = result.total_inference_time_ms;
+    const modeSummary =
+      detectionMode === "multi-slice"
+        ? `${result.slices_count} slices`
+        : "single view";
     if (statusEl) {
       statusEl.textContent =
         count > 0
-          ? `Found ${count} parking sign${count > 1 ? "s" : ""} (${result.slices_count} slices, ${timeMs.toFixed(0)}ms). Click a box to save.`
-          : `No parking signs detected (${result.slices_count} slices, ${timeMs.toFixed(0)}ms)`;
+          ? `Found ${count} parking sign${count > 1 ? "s" : ""} (${modeSummary}, ${timeMs.toFixed(0)}ms). Click a box to save.`
+          : `No parking signs detected (${modeSummary}, ${timeMs.toFixed(0)}ms)`;
     }
 
     return result;
