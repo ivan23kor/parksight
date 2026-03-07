@@ -1223,7 +1223,7 @@ async function runDetectionOnPanorama(
   heading,
   statusEl,
   useCurrentPov = false,
-  useSahi = false,
+  useSahi = true,
 ) {
   let fov = 90;
   let pitch = PANORAMA_DEFAULTS.pitch;
@@ -1263,69 +1263,40 @@ async function runDetectionOnPanorama(
       : "Detecting parking signs...";
 
   try {
-    if (useSahi) {
-      const result = await runSahiDetection(
-        detectPanoId,
-        detectHeading,
-        pitch,
-        fov,
-        statusEl,
-      );
-
-      // SAHI returns angular detections directly
-      currentDetections = clusterAngularDetections(
-        result.detections.map((det) => ({
-          heading: det.heading,
-          pitch: det.pitch,
-          angularWidth: det.angular_width,
-          angularHeight: det.angular_height,
-          confidence: det.confidence,
-          class_name: det.class_name,
-        })),
-      );
-
-      detectionPov = { heading: detectHeading, pitch, fov };
-      updateDetectionOverlay();
-
-      const count = currentDetections.length;
-      const timeMs = result.total_inference_time_ms;
-      if (statusEl) {
-        statusEl.textContent =
-          count > 0
-            ? `Found ${count} parking sign${count > 1 ? "s" : ""} (${result.slices_count} slices, ${timeMs.toFixed(0)}ms). Click a box to save.`
-            : `No parking signs detected (${result.slices_count} slices, ${timeMs.toFixed(0)}ms)`;
-      }
-
-      return result;
+    if (!useSahi) {
+      throw new Error("Standard detection is disabled; use SAHI detection.");
     }
 
-    // Standard single-image detection
-    const imageUrl = getStreetViewImageUrl(
+    const result = await runSahiDetection(
       detectPanoId,
       detectHeading,
       pitch,
       fov,
-      imgWidth,
-      imgHeight,
+      statusEl,
     );
-    const result = await runDetection(imageUrl);
 
+    // SAHI returns angular detections directly.
     currentDetections = clusterAngularDetections(
-      result.detections.map((det) =>
-        detectionToAngular(det, detectHeading, pitch, fov, imgWidth, imgHeight),
-      ),
+      result.detections.map((det) => ({
+        heading: det.heading,
+        pitch: det.pitch,
+        angularWidth: det.angular_width,
+        angularHeight: det.angular_height,
+        confidence: det.confidence,
+        class_name: det.class_name,
+      })),
     );
 
     detectionPov = { heading: detectHeading, pitch, fov };
     updateDetectionOverlay();
 
     const count = currentDetections.length;
-    const timeMs = result.inference_time_ms;
+    const timeMs = result.total_inference_time_ms;
     if (statusEl) {
       statusEl.textContent =
         count > 0
-          ? `Found ${count} parking sign${count > 1 ? "s" : ""} (${timeMs}ms). Click a box to save.`
-          : `No parking signs detected (${timeMs}ms)`;
+          ? `Found ${count} parking sign${count > 1 ? "s" : ""} (${result.slices_count} slices, ${timeMs.toFixed(0)}ms). Click a box to save.`
+          : `No parking signs detected (${result.slices_count} slices, ${timeMs.toFixed(0)}ms)`;
     }
 
     return result;
