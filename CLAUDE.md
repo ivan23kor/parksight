@@ -18,16 +18,25 @@ Three main parts:
   - the static app on `http://127.0.0.1:8080`
   - the FastAPI detection backend on `http://127.0.0.1:8000`
   - backend and web logs under `logs/backend.log` and `logs/web.log`
+  - the stack only reports ready after the backend passes `GET /health`
+
+- Default startup path for agents:
+  ```bash
+  GOOGLE_MAPS_API_KEY=... bun run start
+  ```
+  Use this instead of `bun run start:web` when detection, previews, or any map workflow depends on the backend being available.
 
 - Start only the static app on `http://localhost:8080` (injects `GOOGLE_MAPS_API_KEY` from env):
   ```bash
   GOOGLE_MAPS_API_KEY=... bun run start:web
   ```
+  This does not start the detection backend. Detection and preview requests will hard-fail until the backend is started separately.
 
 - Start only the backend:
   ```bash
   bun run start:backend
   ```
+  This bootstraps `.venv` if needed and starts FastAPI on `http://127.0.0.1:8000`.
 
 - Serve Python version for the static files only:
   ```bash
@@ -41,7 +50,7 @@ bun run build    # Builds ui-upload/ to ui-upload/out/
 
 ### Run UI end-to-end tests
 These tests cover the `ui-map` detection flow end to end with mocked Google Maps, Leaflet, and detection API responses. They verify:
-- detection still works when `detect-sahi` is unavailable and the UI falls back to `/detect`
+- detection failures surface correctly when the backend or `detect-sahi` is unavailable
 - projected sign markers are persisted on the 2D map
 - curb-line projection stays parallel to the selected street segment
 
@@ -64,14 +73,17 @@ Expects source datasets under `datasets/` (gitignored, local-only). Writes to `d
 
 ### Run detection backend
 ```bash
-# With uv (preferred):
+# Preferred:
+bun run start:backend
+
+# Manual fallback:
 uv venv && uv pip install --python .venv/bin/python -r backend/requirements.txt
-.venv/bin/python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 
 # Or with venv/pip:
 python3 -m venv .venv
 .venv/bin/pip install -r backend/requirements.txt
-.venv/bin/python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+.venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
 ### Train on Kaggle
@@ -148,5 +160,5 @@ Data flow:
 ## Sharp edges / mismatches
 - `package.json` references `src/index.html` but actual source is `index.html` at repo root (no `src/` dir)
 - `run-sign-detector.sh` and `start-sign-detector.sh` are compatibility wrappers around `scripts/start-stack.sh`
-- Detection requires backend on `http://localhost:8000` — UI gracefully degrades without it
+- Detection requires backend on `http://127.0.0.1:8000` — UI detection and preview actions will hard-fail without it, so agents should prefer `GOOGLE_MAPS_API_KEY=... bun run start`
 - Training is on Kaggle, not locally — no Docker setup currently in use
