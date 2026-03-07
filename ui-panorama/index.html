@@ -194,10 +194,11 @@
                 // Initialize panorama with side offset
                 const container = document.getElementById('detectionPanorama');
                 const side = document.getElementById('sideToggle').value;
-                const heading = calculateHeadingWithSide(BASE_HEADING, side);
+                // Add 180° to look at the opposite side of the street
+                const heading = (calculateHeadingWithSide(BASE_HEADING, side) + 180) % 360;
                 initDetectionPanorama(currentPanoId, heading, container);
 
-                statusEl.textContent = 'Click "Detect" to scan for parking signs';
+                statusEl.textContent = `Click "Detect" to scan (heading: ${Math.round(heading)}°)`;
 
             } catch (err) {
                 console.error('Init error:', err);
@@ -227,7 +228,7 @@
         // Side toggle - adjust panorama heading when changed
         document.getElementById('sideToggle').addEventListener('change', (e) => {
             if (!currentPanoId) return;
-            const heading = calculateHeadingWithSide(currentBaseHeading, e.target.value);
+            const heading = (calculateHeadingWithSide(currentBaseHeading, e.target.value) + 180) % 360;
             initDetectionPanorama(currentPanoId, heading, document.getElementById('detectionPanorama'));
         });
     </script>
