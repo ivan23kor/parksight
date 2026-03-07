@@ -25,7 +25,8 @@ const TILE_SIZE = 512; // Street View tile size in pixels
 const MAX_ZOOM = 5; // Maximum zoom level for Street View tiles
 const TILE_GRID_WIDTH = 32 * TILE_SIZE; // 16384
 const TILE_GRID_HEIGHT = 16 * TILE_SIZE; // 8192
-const CROP_PADDING = 1.4; // 20% extra on each side of the detected sign
+const CROP_PADDING_X = 1.2; // 20% wider total around the detected sign
+const CROP_PADDING_Y = 1.35; // More vertical context for stacked sign groups
 
 /**
  * Convert heading/pitch to pixel coordinates in the full panorama tile image.
@@ -85,9 +86,16 @@ function pixelToHeadingPitch(x, y, imageWidth, imageHeight, panoHeading = 0) {
 /**
  * Get tile coordinates that cover a pixel region.
  */
-function getTilesForRegion(x, y, width, height, padding = 1.2) {
-  const pw = width * padding;
-  const ph = height * padding;
+function getTilesForRegion(
+  x,
+  y,
+  width,
+  height,
+  paddingX = CROP_PADDING_X,
+  paddingY = CROP_PADDING_Y,
+) {
+  const pw = width * paddingX;
+  const ph = height * paddingY;
 
   // Calculate bounds - (x, y) is the center of the detection
   const x1 = x - pw / 2;
@@ -1267,7 +1275,7 @@ async function cropAndSaveSign(det, cropCenterOverride = null) {
         `TILE GRID: ${imageWidth}×${imageHeight} (zoom 5, ${TILE_SIZE}px tiles)\n` +
         `PIXEL uncorrected: (${uncorrected.x.toFixed(1)}, ${uncorrected.y.toFixed(1)})\n` +
         `PIXEL corrected:   (${corrected.x.toFixed(1)}, ${corrected.y.toFixed(1)}) yCorrection=${corrected.yCorrection.toFixed(1)}px\n` +
-        `PIXEL sign size:   ${signSize.width.toFixed(0)}×${signSize.height.toFixed(0)} (with ${CROP_PADDING.toFixed(1)}x padding: ${Math.round(signSize.width * CROP_PADDING)}×${Math.round(signSize.height * CROP_PADDING)})\n` +
+        `PIXEL sign size:   ${signSize.width.toFixed(0)}×${signSize.height.toFixed(0)} (with ${CROP_PADDING_X.toFixed(2)}x/${CROP_PADDING_Y.toFixed(2)}x padding: ${Math.round(signSize.width * CROP_PADDING_X)}×${Math.round(signSize.height * CROP_PADDING_Y)})\n` +
         `TILES: origin=(${tileX1},${tileY1}) fetching=${JSON.stringify(tiles)}\n` +
         `CROP in stitched: x=${cropBounds.x} y=${cropBounds.y} w=${cropBounds.width} h=${cropBounds.height}\n` +
         `CROP center in tile grid: (${(tileX1 * TILE_SIZE + cropBounds.x + cropBounds.width / 2).toFixed(0)}, ${(tileY1 * TILE_SIZE + cropBounds.y + cropBounds.height / 2).toFixed(0)})\n` +
@@ -1346,7 +1354,8 @@ async function buildDetectionCropPlan(det, panoId, cropCenterOverride = null) {
     corrected.y,
     signSize.width,
     signSize.height,
-    CROP_PADDING,
+    CROP_PADDING_X,
+    CROP_PADDING_Y,
   );
 
   return {
