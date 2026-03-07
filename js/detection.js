@@ -987,32 +987,27 @@ async function cropAndSaveSign(det, cropCenterOverride = null) {
     if (statusEl) statusEl.textContent = 'Saving sign...';
     
     try {
-        const session = await getSessionToken();
-        const metadata = await fetchStreetViewMetadata(panoId, session);
-        
-        const imageWidth = TILE_GRID_WIDTH;
-        const imageHeight = TILE_GRID_HEIGHT;
-        const panoHeading = metadata.heading || 0;
-        const tilt = metadata.tilt ?? 90;
-        
-        const cropHeading = cropCenterOverride?.heading ?? det.heading;
-        const cropPitch = cropCenterOverride?.pitch ?? det.pitch;
-        const uncorrected = headingPitchToPixel(cropHeading, cropPitch, imageWidth, imageHeight, panoHeading);
-        const corrected = headingPitchToPixelCorrected(cropHeading, cropPitch, imageWidth, imageHeight, panoHeading, tilt);
-        const signSize = angularToPixelSize(det.angularWidth, det.angularHeight, imageWidth, imageHeight);
-        
-        let detectionRelH = det.heading - panoHeading;
-        if (detectionRelH < -180) detectionRelH += 360;
-        if (detectionRelH > 180) detectionRelH -= 360;
-
-        let cropRelH = cropHeading - panoHeading;
-        if (cropRelH < -180) cropRelH += 360;
-        if (cropRelH > 180) cropRelH -= 360;
-        
-        // Use corrected coordinates with 1.2x padding
-        const { tiles, tileX1, tileY1, cropBounds } = getTilesForRegion(
-            corrected.x, corrected.y, signSize.width, signSize.height, CROP_PADDING
-        );
+        const cropPlan = await buildDetectionCropPlan(det, panoId, cropCenterOverride);
+        const {
+            session,
+            metadata,
+            imageWidth,
+            imageHeight,
+            panoHeading,
+            tilt,
+            cropHeading,
+            cropPitch,
+            uncorrected,
+            corrected,
+            signSize,
+            detectionRelH,
+            cropRelH,
+            tiles,
+            tileX1,
+            tileY1,
+            cropBounds,
+            requestBody
+        } = cropPlan;
         
         // Current panorama viewer state
         const pov = detectionPanorama.getPov();
@@ -1039,18 +1034,9 @@ async function cropAndSaveSign(det, cropCenterOverride = null) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                pano_id: panoId,
-                tiles: tiles,
-                tile_x1: tileX1,
-                tile_y1: tileY1,
-                crop_x: cropBounds.x,
-                crop_y: cropBounds.y,
-                crop_width: cropBounds.width,
-                crop_height: cropBounds.height,
-                confidence: det.confidence,
-                api_key: window.GOOGLE_CONFIG?.API_KEY,
-                session_token: session,
-                debug: true
+                ...requestBody,
+                debug: true,
+                save: true
             })
         });
         
@@ -1071,11 +1057,110 @@ async function cropAndSaveSign(det, cropCenterOverride = null) {
     }
 }
 
+async function buildDetectionCropPlan(det, panoId, cropCenterOverride = null) {
+    const session = await getSessionToken();
+    const metadata = await fetchStreetViewMetadata(panoId, session);
+
+    const imageWidth = TILE_GRID_WIDTH;
+    const imageHeight = TILE_GRID_HEIGHT;
+    const panoHeading = metadata.heading || 0;
+    const tilt = metadata.tilt ?? 90;
+
+    const cropHeading = cropCenterOverride?.heading ?? det.heading;
+    const cropPitch = cropCenterOverride?.pitch ?? det.pitch;
+    const uncorrected = headingPitchToPixel(cropHeading, cropPitch, imageWidth, imageHeight, panoHeading);
+    const corrected = headingPitchToPixelCorrected(cropHeading, cropPitch, imageWidth, imageHeight, panoHeading, tilt);
+    const signSize = angularToPixelSize(det.angularWidth, det.angularHeight, imageWidth, imageHeight);
+
+    let detectionRelH = det.heading - panoHeading;
+    if (detectionRelH < -180) detectionRelH += 360;
+    if (detectionRelH > 180) detectionRelH -= 360;
+
+    let cropRelH = cropHeading - panoHeading;
+    if (cropRelH < -180) cropRelH += 360;
+    if (cropRelH > 180) cropRelH -= 360;
+
+    const { tiles, tileX1, tileY1, cropBounds } = getTilesForRegion(
+        corrected.x, corrected.y, signSize.width, signSize.height, CROP_PADDING
+    );
+
+    return {
+        session,
+        metadata,
+        imageWidth,
+        imageHeight,
+        panoHeading,
+        tilt,
+        cropHeading,
+        cropPitch,
+        uncorrected,
+        corrected,
+        signSize,
+        detectionRelH,
+        cropRelH,
+        tiles,
+        tileX1,
+        tileY1,
+        cropBounds,
+        requestBody: {
+            pano_id: panoId,
+            tiles,
+            tile_x1: tileX1,
+            tile_y1: tileY1,
+            crop_x: cropBounds.x,
+            crop_y: cropBounds.y,
+            crop_width: cropBounds.width,
+            crop_height: cropBounds.height,
+            confidence: det.confidence,
+            api_key: window.GOOGLE_CONFIG?.API_KEY,
+            session_token: session
+        }
+    };
+}
+
+async function fetchDetectionCropPreview(det, panoId) {
+    const apiUrl = window.DETECTION_CONFIG?.API_URL;
+    if (!apiUrl) {
+        throw new Error('Detection API not configured');
+    }
+
+    const cropPlan = await buildDetectionCropPlan(det, panoId);
+    const resp = await fetch(`${apiUrl}/crop-sign-tiles`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            ...cropPlan.requestBody,
+            save: false,
+            include_image: true
+        })
+    });
+
+    if (!resp.ok) {
+        const errText = await resp.text();
+        throw new Error(`Preview failed: ${resp.status} - ${errText}`);
+    }
+
+    const result = await resp.json();
+    if (!result.image_base64) {
+        throw new Error('Preview response missing image data');
+    }
+
+    return {
+        src: `data:image/jpeg;base64,${result.image_base64}`,
+        width: result.width,
+        height: result.height,
+        tilesFetched: result.tiles_fetched
+    };
+}
+
 // Google Street View camera height in meters (roof-mounted camera)
 const SV_CAMERA_HEIGHT = 2.5;
 const EARTH_RADIUS_METERS = 6371000;
 const PARKING_SIGN_FACE_HEIGHT_METERS = 0.75;
-const CURB_OFFSET_METERS = 6;
+// Approximate offset from the street centerline to the curb edge where signs stand.
+// Keep this conservative so projected markers stay on the road/sidewalk boundary
+// rather than drifting into parcels or building footprints.
+const CURB_OFFSET_METERS = 3.5;
 
 /**
  * Project a point from a start lat/lng by distance and bearing.
@@ -1264,12 +1349,20 @@ function estimateAllSignLocations(cameraLat, cameraLng, options = null) {
                 ? projectSignToCurbLine(cameraLat, cameraLng, estimate.distance, det.heading, options)
                 : null;
 
+            const enrichedEstimate = {
+                ...estimate,
+                panoId: currentDetectionContext?.panoId || null,
+                angularWidth: det.angularWidth,
+                angularHeight: det.angularHeight,
+                pitch: det.pitch
+            };
+
             if (!curbAligned) {
-                return estimate;
+                return enrichedEstimate;
             }
 
             return {
-                ...estimate,
+                ...enrichedEstimate,
                 lat: curbAligned.lat,
                 lng: curbAligned.lng,
                 alongStreetDistance: curbAligned.alongStreetDistance,

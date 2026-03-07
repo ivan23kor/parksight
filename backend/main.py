@@ -2,6 +2,7 @@
 Parking Sign Detection API.
 FastAPI backend for YOLO11 inference on Street View images.
 """
+import base64
 import asyncio
 import io
 import math
@@ -59,6 +60,8 @@ class CropSignTilesRequest(BaseModel):
     api_key: str
     session_token: str
     debug: bool = False
+    save: bool = True
+    include_image: bool = False
 
 
 class Detection(BaseModel):
@@ -410,16 +413,25 @@ async def crop_sign_tiles(request: CropSignTilesRequest):
                 if 0 <= y_line < crop_h:
                     draw.line([(cx - 8, y_line), (cx + 8, y_line)], fill='red', width=1)
     
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{timestamp}_conf{request.confidence:.2f}.jpg"
-    cropped.save(DETECTED_SIGNS_DIR / filename, quality=95)
-    
-    return {
+    filename = None
+    if request.save:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{timestamp}_conf{request.confidence:.2f}.jpg"
+        cropped.save(DETECTED_SIGNS_DIR / filename, quality=95)
+
+    response = {
         "filename": filename,
         "width": x2 - x1,
         "height": y2 - y1,
         "tiles_fetched": len(request.tiles)
     }
+
+    if request.include_image:
+        image_buffer = io.BytesIO()
+        cropped.save(image_buffer, format="JPEG", quality=90)
+        response["image_base64"] = base64.b64encode(image_buffer.getvalue()).decode("ascii")
+
+    return response
 
 
 @app.post("/detect", response_model=DetectionResponse)

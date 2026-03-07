@@ -292,6 +292,27 @@
             line-height: 1.4;
             min-width: 280px;
         }
+
+        .sign-preview-popup {
+            min-width: 180px;
+        }
+
+        .sign-preview-popup img {
+            display: block;
+            width: 100%;
+            height: auto;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            background: #f3f4f6;
+        }
+
+        .sign-preview-popup .preview-loading,
+        .sign-preview-popup .preview-error {
+            color: #4b5563;
+            font-size: 13px;
+            line-height: 1.4;
+        }
+
     </style>
 </head>
 <body>
@@ -301,12 +322,6 @@
     </div>
 
     <div class="controls">
-        <button id="selectStreets">Select Area (Ctrl+Drag)</button>
-        <select id="sideToggle">
-            <option value="right">Right side</option>
-            <option value="left">Left side</option>
-        </select>
-        <button id="clearStreets" style="background: #dc3545;">Clear</button>
     </div>
 
     <div id="map"></div>
@@ -393,12 +408,23 @@
         let currentPoints = [];
         let currentPanoIds = [];
         const SIGN_MAP_STORAGE_KEY = 'parksight_latest_sign_map_data';
+        const SIGN_MAP_PROJECTION_VERSION = 2;
 
         function normalizeSignMapStore(parsed) {
             if (!parsed) {
                 return {
                     savedAt: null,
                     source: 'none',
+                    projectionVersion: SIGN_MAP_PROJECTION_VERSION,
+                    detections: []
+                };
+            }
+
+            if (parsed.projectionVersion !== SIGN_MAP_PROJECTION_VERSION) {
+                return {
+                    savedAt: null,
+                    source: 'none',
+                    projectionVersion: SIGN_MAP_PROJECTION_VERSION,
                     detections: []
                 };
             }
@@ -407,6 +433,7 @@
                 return {
                     savedAt: parsed.savedAt || null,
                     source: parsed.source || 'unknown',
+                    projectionVersion: SIGN_MAP_PROJECTION_VERSION,
                     detections: parsed.detections.filter(Boolean)
                 };
             }
@@ -415,6 +442,7 @@
                 return {
                     savedAt: parsed.savedAt || null,
                     source: parsed.source || 'unknown',
+                    projectionVersion: SIGN_MAP_PROJECTION_VERSION,
                     detections: [parsed]
                 };
             }
@@ -422,6 +450,7 @@
             return {
                 savedAt: null,
                 source: 'unknown',
+                projectionVersion: SIGN_MAP_PROJECTION_VERSION,
                 detections: []
             };
         }
@@ -444,10 +473,31 @@
 
         function appendSignMapDetection(detectionEntry) {
             const store = getLatestSignMapData();
+            const sameDetection = candidate => {
+                if (!candidate || !detectionEntry) return false;
+
+                if (candidate.panoId && detectionEntry.panoId) {
+                    return candidate.panoId === detectionEntry.panoId;
+                }
+
+                if (!candidate.camera || !detectionEntry.camera) {
+                    return false;
+                }
+
+                return (
+                    Math.abs(candidate.camera.lat - detectionEntry.camera.lat) < 1e-7 &&
+                    Math.abs(candidate.camera.lng - detectionEntry.camera.lng) < 1e-7
+                );
+            };
+
             const nextStore = {
                 savedAt: Date.now(),
                 source: detectionEntry.source || store.source || 'ui-map',
-                detections: [...store.detections, detectionEntry]
+                projectionVersion: SIGN_MAP_PROJECTION_VERSION,
+                detections: [
+                    ...store.detections.filter(existing => !sameDetection(existing)),
+                    detectionEntry
+                ]
             };
             persistLatestSignMapData(nextStore);
             return nextStore;
@@ -527,13 +577,12 @@
                         fillOpacity: 0.65
                     }).addTo(signMarkersLayer);
 
-                    signCircle.bindPopup(
-                        `<b>Parking sign</b><br>` +
-                        `Run: ${detectionIndex + 1}<br>` +
-                        `Confidence: ${(sign.confidence * 100).toFixed(0)}%<br>` +
-                        `Distance: ${sign.distance.toFixed(1)}m<br>` +
-                        `Method: ${sign.method}`
-                    );
+                    signCircle.bindPopup(createSignPreviewPopupHtml(sign), {
+                        maxWidth: 220
+                    });
+                    signCircle.on('popupopen', (event) => {
+                        loadSignPreview(sign, event.popup);
+                    });
 
                     boundsPoints.push([sign.lat, sign.lng]);
                 }
@@ -548,6 +597,75 @@
             }
 
             updateMapDebug(data);
+        }
+
+        function createSignPreviewPopupHtml(sign) {
+            const previewId = `sign-preview-${Math.random().toString(36).slice(2, 10)}`;
+            sign.previewContainerId = previewId;
+
+            return `
+                <div class="sign-preview-popup" id="${previewId}">
+                    <div class="preview-loading">Loading sign preview...</div>
+                </div>
+            `;
+        }
+
+        function renderSignPreviewContent(container, sign, state) {
+            if (state.error) {
+                container.innerHTML = `<div class="preview-error">${state.error}</div>`;
+                return;
+            }
+
+            if (!state.src) {
+                container.innerHTML = `<div class="preview-loading">Loading sign preview...</div>`;
+                return;
+            }
+
+            container.innerHTML = `
+                <img src="${state.src}" alt="Detected parking sign preview">
+            `;
+        }
+
+        async function loadSignPreview(sign, popup) {
+            const container = popup?.getElement()?.querySelector(`#${sign.previewContainerId}`);
+            if (!container) return;
+
+            renderSignPreviewContent(container, sign, {
+                src: sign.previewSrc || null,
+                error: sign.previewError || null
+            });
+
+            if (sign.previewSrc || sign.previewError || sign.previewLoading) {
+                return;
+            }
+
+            if (!sign.panoId || !Number.isFinite(sign.heading) || !Number.isFinite(sign.pitch)) {
+                sign.previewError = 'Preview unavailable for this sign.';
+                renderSignPreviewContent(container, sign, { error: sign.previewError });
+                return;
+            }
+
+            sign.previewLoading = true;
+
+            try {
+                const preview = await fetchDetectionCropPreview({
+                    heading: sign.heading,
+                    pitch: sign.pitch,
+                    angularWidth: sign.angularWidth,
+                    angularHeight: sign.angularHeight,
+                    confidence: sign.confidence,
+                    class_name: sign.class_name || 'parking_sign'
+                }, sign.panoId);
+
+                sign.previewSrc = preview.src;
+                renderSignPreviewContent(container, sign, { src: sign.previewSrc });
+            } catch (err) {
+                console.error('Failed to load sign preview:', err);
+                sign.previewError = 'Preview unavailable.';
+                renderSignPreviewContent(container, sign, { error: sign.previewError });
+            } finally {
+                sign.previewLoading = false;
+            }
         }
 
         /**
