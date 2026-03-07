@@ -1156,11 +1156,25 @@ function projectSignToCurbLine(cameraLat, cameraLng, distanceMeters, signHeading
         : trafficBearing + 90;
     const curbOrigin = projectLatLng(cameraLat, cameraLng, curbOffsetMeters, lateralBearing);
     const headingDelta = signedAngleDeltaDegrees(signHeading, trafficBearing);
-    const alongStreetDistance = distanceMeters * Math.cos(headingDelta * Math.PI / 180);
+    const headingDeltaRad = headingDelta * Math.PI / 180;
+    const sideSign = side === 'left' ? -1 : 1;
+
+    // Keep the sign on the curb by following the detection ray only until it
+    // reaches the street edge. This prevents far detections from sliding deep
+    // into adjacent buildings on wide or oblique streets.
+    const rawAlongStreetDistance = distanceMeters * Math.cos(headingDeltaRad);
+    const rawLateralDistance = sideSign * distanceMeters * Math.sin(headingDeltaRad);
+
+    let alongStreetDistance = rawAlongStreetDistance;
+    if (rawLateralDistance > curbOffsetMeters + 0.25) {
+        alongStreetDistance *= curbOffsetMeters / rawLateralDistance;
+    }
 
     return {
         ...projectSignedDistance(curbOrigin.lat, curbOrigin.lng, alongStreetDistance, trafficBearing),
         alongStreetDistance,
+        rawAlongStreetDistance,
+        rawLateralDistance,
         curbOffsetMeters,
         trafficBearing,
         side
