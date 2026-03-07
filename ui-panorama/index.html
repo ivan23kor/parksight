@@ -93,26 +93,40 @@
             z-index: 2001;
         }
 
-        #uiSwitcher select {
-            padding: 10px 12px;
-            border-radius: 4px;
+        #uiSwitcher {
+            display: inline-flex;
+            gap: 4px;
+            padding: 4px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.18);
+            backdrop-filter: blur(10px);
+        }
+
+        .viewToggle {
+            padding: 10px 14px;
+            border-radius: 999px;
             border: none;
             font-size: 14px;
             cursor: pointer;
-            background: rgba(255,255,255,0.9);
+            background: rgba(255,255,255,0.88);
+            color: #222;
+            transition: background 0.15s ease, color 0.15s ease;
         }
 
-        #uiSwitcher select:hover {
+        .viewToggle:hover {
             background: white;
+        }
+
+        .viewToggle.active {
+            background: #111;
+            color: white;
         }
     </style>
 </head>
 <body>
     <div id="uiSwitcher">
-        <select id="uiSelect" onchange="if(this.value) window.location.href=this.value">
-            <option value="../ui-panorama/" selected>🔭 Panorama</option>
-            <option value="../ui-map/">📍 Map</option>
-        </select>
+        <button type="button" class="viewToggle active" aria-current="page">🔭 Panorama</button>
+        <button type="button" class="viewToggle" onclick="window.location.href='../ui-map/'">📍 Map</button>
     </div>
 
     <div id="controls">
@@ -160,6 +174,60 @@
         const INITIAL_LOCATION = { lat: 42.3615, lon: -71.0921 };
         const BASE_HEADING = 90; // Facing east along 9 Ave
         const SIGN_MAP_STORAGE_KEY = 'parksight_latest_sign_map_data';
+
+        function normalizeSignMapStore(parsed) {
+            if (!parsed) {
+                return {
+                    savedAt: null,
+                    source: 'none',
+                    detections: []
+                };
+            }
+
+            if (Array.isArray(parsed.detections)) {
+                return {
+                    savedAt: parsed.savedAt || null,
+                    source: parsed.source || 'unknown',
+                    detections: parsed.detections.filter(Boolean)
+                };
+            }
+
+            if (parsed.camera) {
+                return {
+                    savedAt: parsed.savedAt || null,
+                    source: parsed.source || 'unknown',
+                    detections: [parsed]
+                };
+            }
+
+            return {
+                savedAt: null,
+                source: 'unknown',
+                detections: []
+            };
+        }
+
+        function appendSignMapDetection(detectionEntry) {
+            const raw = localStorage.getItem(SIGN_MAP_STORAGE_KEY);
+            let store = normalizeSignMapStore(null);
+
+            if (raw) {
+                try {
+                    store = normalizeSignMapStore(JSON.parse(raw));
+                } catch (err) {
+                    console.error('Failed to parse persisted sign map data:', err);
+                }
+            }
+
+            const nextStore = {
+                savedAt: Date.now(),
+                source: detectionEntry.source || 'ui-panorama',
+                detections: [...store.detections, detectionEntry]
+            };
+
+            localStorage.setItem(SIGN_MAP_STORAGE_KEY, JSON.stringify(nextStore));
+            return nextStore;
+        }
 
         let currentPanoId = null;
         let currentBaseHeading = BASE_HEADING;
@@ -238,7 +306,7 @@
                 console.log(`=========================`);
 
                 if (camLat != null && camLng != null) {
-                    const mapData = {
+                    const detectionEntry = {
                         savedAt: Date.now(),
                         source: 'ui-panorama',
                         panoId: currentPanoId,
@@ -248,7 +316,7 @@
                         },
                         signs: signLocations
                     };
-                    localStorage.setItem(SIGN_MAP_STORAGE_KEY, JSON.stringify(mapData));
+                    const mapData = appendSignMapDetection(detectionEntry);
                     window.latestSignMapData = mapData;
                     console.log('Saved sign map data:', mapData);
                 }

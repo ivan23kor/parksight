@@ -68,14 +68,34 @@
             z-index: 1000;
         }
 
-        #uiSwitcher select {
+        #uiSwitcher {
+            display: inline-flex;
+            gap: 4px;
+            padding: 4px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.92);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .viewToggle {
             padding: 8px 12px;
-            border-radius: 4px;
-            border: 1px solid #ccc;
+            border-radius: 999px;
+            border: none;
             font-size: 14px;
             cursor: pointer;
-            background: white;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            background: transparent;
+            color: #333;
+            margin-right: 0;
+            transition: background 0.15s ease, color 0.15s ease;
+        }
+
+        .viewToggle:hover {
+            background: rgba(0,0,0,0.06);
+        }
+
+        .viewToggle.active {
+            background: #007cba;
+            color: white;
         }
 
         .controls button {
@@ -276,10 +296,8 @@
 </head>
 <body>
     <div id="uiSwitcher">
-        <select id="uiSelect" onchange="if(this.value) window.location.href=this.value">
-            <option value="../ui-panorama/">🔭 Panorama</option>
-            <option value="../ui-map/" selected>📍 Map</option>
-        </select>
+        <button type="button" class="viewToggle" onclick="window.location.href='../ui-panorama/'">🔭 Panorama</button>
+        <button type="button" class="viewToggle active" aria-current="page">📍 Map</button>
     </div>
 
     <div class="controls">
@@ -376,20 +394,63 @@
         let currentPanoIds = [];
         const SIGN_MAP_STORAGE_KEY = 'parksight_latest_sign_map_data';
 
+        function normalizeSignMapStore(parsed) {
+            if (!parsed) {
+                return {
+                    savedAt: null,
+                    source: 'none',
+                    detections: []
+                };
+            }
+
+            if (Array.isArray(parsed.detections)) {
+                return {
+                    savedAt: parsed.savedAt || null,
+                    source: parsed.source || 'unknown',
+                    detections: parsed.detections.filter(Boolean)
+                };
+            }
+
+            if (parsed.camera) {
+                return {
+                    savedAt: parsed.savedAt || null,
+                    source: parsed.source || 'unknown',
+                    detections: [parsed]
+                };
+            }
+
+            return {
+                savedAt: null,
+                source: 'unknown',
+                detections: []
+            };
+        }
+
         function getLatestSignMapData() {
             const raw = localStorage.getItem(SIGN_MAP_STORAGE_KEY);
-            if (!raw) return null;
+            if (!raw) return normalizeSignMapStore(null);
 
             try {
-                return JSON.parse(raw);
+                return normalizeSignMapStore(JSON.parse(raw));
             } catch (err) {
                 console.error('Failed to parse persisted sign map data:', err);
-                return null;
+                return normalizeSignMapStore(null);
             }
         }
 
         function persistLatestSignMapData(data) {
             localStorage.setItem(SIGN_MAP_STORAGE_KEY, JSON.stringify(data));
+        }
+
+        function appendSignMapDetection(detectionEntry) {
+            const store = getLatestSignMapData();
+            const nextStore = {
+                savedAt: Date.now(),
+                source: detectionEntry.source || store.source || 'ui-map',
+                detections: [...store.detections, detectionEntry]
+            };
+            persistLatestSignMapData(nextStore);
+            return nextStore;
         }
 
         function updateMapDebug(data = null) {
@@ -398,10 +459,12 @@
 
             const bounds = map.getBounds();
             const center = map.getCenter();
-            const signCount = data?.signs?.length ?? 0;
+            const detections = data?.detections || [];
+            const signCount = detections.reduce((sum, detection) => sum + (detection.signs?.length || 0), 0);
+            const cameraCount = detections.length;
             const source = data?.source || 'none';
-            const camera = data?.camera
-                ? `${data.camera.lat.toFixed(6)}, ${data.camera.lng.toFixed(6)}`
+            const latestCamera = cameraCount > 0 && detections[cameraCount - 1]?.camera
+                ? `${detections[cameraCount - 1].camera.lat.toFixed(6)}, ${detections[cameraCount - 1].camera.lng.toFixed(6)}`
                 : 'none';
 
             debugEl.innerHTML =
@@ -409,16 +472,17 @@
                 `center=${center.lat.toFixed(6)}, ${center.lng.toFixed(6)}<br>` +
                 `north=${bounds.getNorth().toFixed(6)} south=${bounds.getSouth().toFixed(6)}<br>` +
                 `east=${bounds.getEast().toFixed(6)} west=${bounds.getWest().toFixed(6)}<br>` +
-                `saved source=${source} signs=${signCount}<br>` +
-                `camera=${camera}`;
+                `saved source=${source} cameras=${cameraCount} signs=${signCount}<br>` +
+                `latest camera=${latestCamera}`;
         }
 
         function renderSignMapData(data) {
             signMarkersLayer.clearLayers();
 
-            if (!data?.camera) {
+            const detections = data?.detections || [];
+            if (detections.length === 0) {
                 console.log('No persisted sign map data found');
-                updateMapDebug(null);
+                updateMapDebug(data);
                 return;
             }
 
@@ -426,49 +490,59 @@
             streetViewDotsLayer.clearLayers();
 
             const projectedMarkerRadius = 10 / 3;
+            const boundsPoints = [];
+            let totalSigns = 0;
 
-            const cameraCircle = L.circle([data.camera.lat, data.camera.lng], {
-                radius: projectedMarkerRadius,
-                color: '#dc2626',
-                fillColor: '#ef4444',
-                weight: 2,
-                opacity: 0.95,
-                fillOpacity: 0.65
-            }).addTo(signMarkersLayer);
+            detections.forEach((detection, detectionIndex) => {
+                if (!detection.camera) return;
 
-            const signCount = Array.isArray(data.signs) ? data.signs.length : 0;
-            cameraCircle.bindPopup(
-                `<b>Panorama point</b><br>` +
-                `Pano: ${data.panoId || 'unknown'}<br>` +
-                `Projected signs: ${signCount}`
-            );
-
-            for (const sign of data.signs || []) {
-                const signCircle = L.circle([sign.lat, sign.lng], {
+                const cameraCircle = L.circle([detection.camera.lat, detection.camera.lng], {
                     radius: projectedMarkerRadius,
-                    color: '#16a34a',
-                    fillColor: '#22c55e',
+                    color: '#dc2626',
+                    fillColor: '#ef4444',
                     weight: 2,
                     opacity: 0.95,
                     fillOpacity: 0.65
                 }).addTo(signMarkersLayer);
 
-                signCircle.bindPopup(
-                    `<b>Parking sign</b><br>` +
-                    `Confidence: ${(sign.confidence * 100).toFixed(0)}%<br>` +
-                    `Distance: ${sign.distance.toFixed(1)}m<br>` +
-                    `Method: ${sign.method}`
+                const signCount = Array.isArray(detection.signs) ? detection.signs.length : 0;
+                totalSigns += signCount;
+
+                cameraCircle.bindPopup(
+                    `<b>Panorama point</b><br>` +
+                    `Run: ${detectionIndex + 1}<br>` +
+                    `Pano: ${detection.panoId || 'unknown'}<br>` +
+                    `Projected signs: ${signCount}`
                 );
-            }
+
+                boundsPoints.push([detection.camera.lat, detection.camera.lng]);
+
+                for (const sign of detection.signs || []) {
+                    const signCircle = L.circle([sign.lat, sign.lng], {
+                        radius: projectedMarkerRadius,
+                        color: '#16a34a',
+                        fillColor: '#22c55e',
+                        weight: 2,
+                        opacity: 0.95,
+                        fillOpacity: 0.65
+                    }).addTo(signMarkersLayer);
+
+                    signCircle.bindPopup(
+                        `<b>Parking sign</b><br>` +
+                        `Run: ${detectionIndex + 1}<br>` +
+                        `Confidence: ${(sign.confidence * 100).toFixed(0)}%<br>` +
+                        `Distance: ${sign.distance.toFixed(1)}m<br>` +
+                        `Method: ${sign.method}`
+                    );
+
+                    boundsPoints.push([sign.lat, sign.lng]);
+                }
+            });
 
             console.log(
-                `Rendered ${signCount} projected sign markers and 1 panorama marker from ${data.source || 'unknown source'}`
+                `Rendered ${totalSigns} projected sign markers across ${detections.length} panorama detections from ${data.source || 'unknown source'}`
             );
 
-            const boundsPoints = [
-                [data.camera.lat, data.camera.lng],
-                ...(data.signs || []).map(sign => [sign.lat, sign.lng])
-            ];
             if (boundsPoints.length > 0) {
                 map.fitBounds(boundsPoints, { padding: [60, 60], maxZoom: 19 });
             }
@@ -546,6 +620,7 @@
                 currentPoints = [];
                 currentPanoIds = [];
                 localStorage.removeItem(SIGN_MAP_STORAGE_KEY);
+                updateMapDebug(getLatestSignMapData());
             });
 
             // Close panorama modal
@@ -863,7 +938,15 @@
             const heading = (calculateHeadingWithSide(point.bearing, side, point.oneway) + 180) % 360;
 
             // Store context for detection (pointIndex for position fallback)
-            currentDetectionContext = { panoId, heading, pointIndex: index };
+            currentDetectionContext = {
+                panoId,
+                heading,
+                pointIndex: index,
+                side,
+                streetBearing: point.bearing,
+                oneway: point.oneway || null,
+                streetName: point.streetName || 'Unknown street'
+            };
 
             // Show detection modal
             const modal = document.getElementById('detectionModal');
@@ -896,6 +979,7 @@
             const { panoId } = currentDetectionContext;
             const statusEl = document.getElementById('detectionStatus');
             const useSahi = document.getElementById('detectMode').value === 'sahi';
+            currentDetectionContext.side = document.getElementById('detectionSideToggle').value;
 
             try {
                 // Use current POV (heading, pitch, zoom/FOV) for detection
@@ -938,8 +1022,12 @@
             }
             const cameraLat = currentPoints[idx].lat;
             const cameraLng = currentPoints[idx].lon;
-            const signLocations = estimateAllSignLocations(cameraLat, cameraLng);
-            const data = {
+            const signLocations = estimateAllSignLocations(cameraLat, cameraLng, {
+                streetBearing: currentDetectionContext.streetBearing,
+                oneway: currentDetectionContext.oneway,
+                side: currentDetectionContext.side
+            });
+            const detectionEntry = {
                 savedAt: Date.now(),
                 source: 'ui-map',
                 panoId: currentDetectionContext.panoId,
@@ -947,11 +1035,12 @@
                     lat: cameraLat,
                     lng: cameraLng
                 },
+                streetName: currentDetectionContext.streetName,
                 signs: signLocations
             };
 
-            persistLatestSignMapData(data);
-            renderSignMapData(data);
+            const store = appendSignMapDetection(detectionEntry);
+            renderSignMapData(store);
         }
 
         /**
