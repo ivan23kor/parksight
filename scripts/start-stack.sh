@@ -40,6 +40,33 @@ ensure_backend_env() {
   fi
 }
 
+wait_for_backend() {
+  local health_url="http://127.0.0.1:${BACKEND_PORT}/health"
+  local max_attempts=60
+  local attempt=1
+
+  while [ "$attempt" -le "$max_attempts" ]; do
+    if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+      echo "Backend exited during startup. Check $LOG_DIR/backend.log"
+      return 1
+    fi
+
+    if python3 - <<PY >/dev/null 2>&1
+import urllib.request
+urllib.request.urlopen("${health_url}", timeout=1)
+PY
+    then
+      return 0
+    fi
+
+    sleep 1
+    attempt=$((attempt + 1))
+  done
+
+  echo "Backend did not become healthy within ${max_attempts}s. Check $LOG_DIR/backend.log"
+  return 1
+}
+
 cleanup() {
   local exit_code=$?
   if [ -n "${BACKEND_PID:-}" ]; then
@@ -62,11 +89,14 @@ echo "Starting backend on http://127.0.0.1:${BACKEND_PORT}"
   >"$LOG_DIR/backend.log" 2>&1 &
 BACKEND_PID=$!
 
+echo "Waiting for backend health check..."
+wait_for_backend
+
 echo "Starting static app on http://127.0.0.1:${WEB_PORT}"
 bun run serve >"$LOG_DIR/web.log" 2>&1 &
 WEB_PID=$!
 
-echo "Stack is starting."
+echo "Stack is ready."
 echo "UI: http://127.0.0.1:${WEB_PORT}/ui-map/"
 echo "API: http://127.0.0.1:${BACKEND_PORT}/docs"
 echo "Logs: $LOG_DIR/backend.log and $LOG_DIR/web.log"
