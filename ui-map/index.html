@@ -383,6 +383,11 @@
       const INITIAL_LOCATION = { lat: 42.3615, lon: -71.0921 };
       const DEFAULT_SIDE = "right";
       const BASE_HEADING = 90;
+      const PREVIEW_ALT_MIN_DISTANCE_METERS = 2.5;
+      const PREVIEW_ALT_MAX_DISTANCE_METERS = 80;
+      const PREVIEW_ALT_IMPROVEMENT_RATIO = 0.92;
+      const PREVIEW_REFINEMENT_FOV_MIN = 18;
+      const PREVIEW_REFINEMENT_FOV_MAX = 40;
 
       function normalizeSignMapStore(parsed) {
         if (!parsed) {
@@ -590,6 +595,270 @@
             `;
       }
 
+      function toRadians(degrees) {
+        return (degrees * Math.PI) / 180;
+      }
+
+      function haversineDistanceMeters(lat1, lng1, lat2, lng2) {
+        const dLat = toRadians(lat2 - lat1);
+        const dLng = toRadians(lng2 - lng1);
+        const a =
+          Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+          Math.cos(toRadians(lat1)) *
+            Math.cos(toRadians(lat2)) *
+            Math.sin(dLng / 2) *
+            Math.sin(dLng / 2);
+        return (
+          2 *
+          EARTH_RADIUS_METERS *
+          Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+        );
+      }
+
+      function bearingBetweenPoints(lat1, lng1, lat2, lng2) {
+        const phi1 = toRadians(lat1);
+        const phi2 = toRadians(lat2);
+        const lambda = toRadians(lng2 - lng1);
+        const y = Math.sin(lambda) * Math.cos(phi2);
+        const x =
+          Math.cos(phi1) * Math.sin(phi2) -
+          Math.sin(phi1) * Math.cos(phi2) * Math.cos(lambda);
+        return normalizeBearingDegrees((Math.atan2(y, x) * 180) / Math.PI);
+      }
+
+      function estimateAlternatePreviewPitch(sign, candidateDistance) {
+        const sourceDistance =
+          Number.isFinite(sign.distance) && sign.distance > 0 ? sign.distance : null;
+
+        if (
+          sourceDistance &&
+          Number.isFinite(sign.pitch) &&
+          Math.abs(sign.pitch) > 0.01
+        ) {
+          const verticalOffsetMeters =
+            Math.tan(toRadians(sign.pitch)) * sourceDistance;
+          return (
+            (Math.atan2(verticalOffsetMeters, candidateDistance) * 180) / Math.PI
+          );
+        }
+
+        return (
+          (Math.atan2(
+            -PARKING_SIGN_FACE_HEIGHT_METERS,
+            Math.max(candidateDistance, 1),
+          ) *
+            180) /
+          Math.PI
+        );
+      }
+
+      function choosePreviewViewForSign(sign, fallbackPanoId) {
+        if (sign.previewView?.panoId && sign.previewView?.detection) {
+          return sign.previewView;
+        }
+
+        const sourcePanoId = sign.panoId || fallbackPanoId || null;
+        if (!sourcePanoId) {
+          return null;
+        }
+
+        const sourceDistance =
+          Number.isFinite(sign.distance) && sign.distance > 0 ? sign.distance : null;
+        const sourceView = {
+          panoId: sourcePanoId,
+          source: "original",
+          candidateDistance: sourceDistance,
+          detection: {
+            heading: sign.heading,
+            pitch: sign.pitch,
+            angularWidth: sign.angularWidth,
+            angularHeight: sign.angularHeight,
+            confidence: sign.confidence,
+            class_name: sign.class_name || "parking_sign",
+          },
+        };
+
+        if (
+          !Number.isFinite(sign.lat) ||
+          !Number.isFinite(sign.lng) ||
+          !Array.isArray(currentPoints) ||
+          !Array.isArray(currentPanoIds) ||
+          currentPoints.length === 0
+        ) {
+          sign.previewView = sourceView;
+          return sourceView;
+        }
+
+        const preferredStreet = currentDetectionContext?.streetName || null;
+        let bestCandidate = null;
+
+        for (let i = 0; i < currentPoints.length; i++) {
+          const point = currentPoints[i];
+          const panoId = currentPanoIds[i];
+          const pointLat = point?.lat;
+          const pointLng = point?.lon ?? point?.lng;
+          if (!panoId || !Number.isFinite(pointLat) || !Number.isFinite(pointLng)) {
+            continue;
+          }
+
+          const candidateDistance = haversineDistanceMeters(
+            pointLat,
+            pointLng,
+            sign.lat,
+            sign.lng,
+          );
+          if (
+            !Number.isFinite(candidateDistance) ||
+            candidateDistance < PREVIEW_ALT_MIN_DISTANCE_METERS ||
+            candidateDistance > PREVIEW_ALT_MAX_DISTANCE_METERS
+          ) {
+            continue;
+          }
+
+          const sameStreet =
+            preferredStreet && point.streetName === preferredStreet;
+          const score = candidateDistance - (sameStreet ? 8 : 0);
+
+          if (!bestCandidate || score < bestCandidate.score) {
+            const distanceScale =
+              sourceDistance && candidateDistance > 0
+                ? clamp(sourceDistance / candidateDistance, 1, 12)
+                : 1;
+            bestCandidate = {
+              panoId,
+              source: sameStreet ? "nearby-same-street" : "nearby",
+              candidateDistance,
+              score,
+              detection: {
+                heading: bearingBetweenPoints(
+                  pointLat,
+                  pointLng,
+                  sign.lat,
+                  sign.lng,
+                ),
+                pitch: estimateAlternatePreviewPitch(sign, candidateDistance),
+                angularWidth: sign.angularWidth * distanceScale,
+                angularHeight: sign.angularHeight * distanceScale,
+                confidence: sign.confidence,
+                class_name: sign.class_name || "parking_sign",
+              },
+            };
+          }
+        }
+
+        const chosenView =
+          bestCandidate &&
+          (!sourceDistance ||
+            bestCandidate.candidateDistance <
+              sourceDistance * PREVIEW_ALT_IMPROVEMENT_RATIO)
+            ? bestCandidate
+            : sourceView;
+
+        sign.previewView = chosenView;
+        sign.previewPanoId = chosenView.panoId;
+        sign.previewSource = chosenView.source;
+        return chosenView;
+      }
+
+      function selectBestRefinedDetection(targetDetection, detections) {
+        if (!Array.isArray(detections) || detections.length === 0) {
+          return null;
+        }
+
+        let best = null;
+        let bestScore = Infinity;
+
+        for (const det of detections) {
+          if (
+            !Number.isFinite(det?.heading) ||
+            !Number.isFinite(det?.pitch) ||
+            !Number.isFinite(det?.angular_width) ||
+            !Number.isFinite(det?.angular_height)
+          ) {
+            continue;
+          }
+
+          const headingDelta = Math.abs(
+            signedAngleDeltaDegrees(det.heading, targetDetection.heading),
+          );
+          const pitchDelta = Math.abs(det.pitch - targetDetection.pitch);
+          const widthRatio =
+            det.angular_width / Math.max(targetDetection.angularWidth, 0.05);
+          const heightRatio =
+            det.angular_height / Math.max(targetDetection.angularHeight, 0.05);
+          const sizePenalty =
+            Math.abs(Math.log(Math.max(widthRatio, 0.05))) +
+            Math.abs(Math.log(Math.max(heightRatio, 0.05)));
+          const score = headingDelta * 2 + pitchDelta * 1.5 + sizePenalty * 4;
+
+          if (score < bestScore) {
+            best = det;
+            bestScore = score;
+          }
+        }
+
+        return best;
+      }
+
+      async function refinePreviewViewWithSahi(sign, previewView) {
+        if (sign.previewRefinedView?.panoId && sign.previewRefinedView?.detection) {
+          return sign.previewRefinedView;
+        }
+        if (sign.previewRefineAttempted || !previewView?.panoId || !previewView?.detection) {
+          return null;
+        }
+
+        sign.previewRefineAttempted = true;
+
+        try {
+          const targetDetection = previewView.detection;
+          const refineFov = clamp(
+            Math.max(
+              targetDetection.angularWidth * 8,
+              targetDetection.angularHeight * 6,
+              PREVIEW_REFINEMENT_FOV_MIN,
+            ),
+            PREVIEW_REFINEMENT_FOV_MIN,
+            PREVIEW_REFINEMENT_FOV_MAX,
+          );
+          const result = await runSahiDetection(
+            previewView.panoId,
+            targetDetection.heading,
+            targetDetection.pitch,
+            refineFov,
+            null,
+          );
+          const refinedMatch = selectBestRefinedDetection(
+            targetDetection,
+            result?.detections,
+          );
+          if (!refinedMatch) {
+            return null;
+          }
+
+          const refinedView = {
+            panoId: previewView.panoId,
+            source: `${previewView.source}+refined`,
+            candidateDistance: previewView.candidateDistance,
+            detection: {
+              heading: refinedMatch.heading,
+              pitch: refinedMatch.pitch,
+              angularWidth: refinedMatch.angular_width,
+              angularHeight: refinedMatch.angular_height,
+              confidence: refinedMatch.confidence,
+              class_name: refinedMatch.class_name || "parking_sign",
+            },
+          };
+
+          sign.previewRefinedView = refinedView;
+          sign.previewRefined = true;
+          return refinedView;
+        } catch (err) {
+          console.warn("Preview refinement failed:", err);
+          return null;
+        }
+      }
+
       async function loadSignPreview(sign, popup) {
         const container = popup
           ?.getElement()
@@ -601,7 +870,11 @@
           error: sign.previewError || null,
         });
 
-        if (sign.previewSrc || sign.previewError || sign.previewLoading) {
+        if (
+          sign.previewLoading ||
+          (sign.previewSrc && (sign.previewRefined || sign.previewRefineAttempted)) ||
+          (sign.previewError && !sign.previewSrc)
+        ) {
           return;
         }
 
@@ -620,25 +893,31 @@
         sign.previewLoading = true;
 
         try {
-          const previewPanoId = sign.panoId || null;
-          if (!previewPanoId) {
+          const previewView = choosePreviewViewForSign(sign, sign.panoId || null);
+          const previewPanoId = previewView?.panoId || null;
+          if (!previewPanoId || !previewView?.detection) {
             throw new Error("Missing panoId for preview");
           }
 
-          const preview = await fetchDetectionCropPreview(
-            {
-              heading: sign.heading,
-              pitch: sign.pitch,
-              angularWidth: sign.angularWidth,
-              angularHeight: sign.angularHeight,
-              confidence: sign.confidence,
-              class_name: sign.class_name || "parking_sign",
-            },
-            previewPanoId,
-          );
+          if (!sign.previewSrc) {
+            const preview = await fetchDetectionCropPreview(
+              previewView.detection,
+              previewPanoId,
+            );
+            sign.previewSrc = preview.src;
+            renderSignPreviewContent(container, sign, { src: sign.previewSrc });
+          }
 
-          sign.previewSrc = preview.src;
-          renderSignPreviewContent(container, sign, { src: sign.previewSrc });
+          const refinedView = await refinePreviewViewWithSahi(sign, previewView);
+          if (refinedView?.panoId && refinedView?.detection) {
+            const refinedPreview = await fetchDetectionCropPreview(
+              refinedView.detection,
+              refinedView.panoId,
+            );
+            sign.previewSrc = refinedPreview.src;
+            renderSignPreviewContent(container, sign, { src: sign.previewSrc });
+          }
+
           if (latestRenderedSignMapData) {
             persistLatestSignMapData(latestRenderedSignMapData);
           }
@@ -664,26 +943,21 @@
         await Promise.allSettled(
           signs.map(async (sign) => {
             sign.panoId = sign.panoId || panoId;
+            const previewView = choosePreviewViewForSign(sign, sign.panoId);
 
             if (
               sign.previewSrc ||
-              !Number.isFinite(sign.heading) ||
-              !Number.isFinite(sign.pitch)
+              !previewView?.panoId ||
+              !Number.isFinite(previewView?.detection?.heading) ||
+              !Number.isFinite(previewView?.detection?.pitch)
             ) {
               return;
             }
 
             try {
               const preview = await fetchDetectionCropPreview(
-                {
-                  heading: sign.heading,
-                  pitch: sign.pitch,
-                  angularWidth: sign.angularWidth,
-                  angularHeight: sign.angularHeight,
-                  confidence: sign.confidence,
-                  class_name: sign.class_name || "parking_sign",
-                },
-                sign.panoId,
+                previewView.detection,
+                previewView.panoId,
               );
               sign.previewSrc = preview.src;
               delete sign.previewError;
