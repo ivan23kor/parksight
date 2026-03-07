@@ -1074,6 +1074,7 @@ async function cropAndSaveSign(det, cropCenterOverride = null) {
 // Google Street View camera height in meters (roof-mounted camera)
 const SV_CAMERA_HEIGHT = 2.5;
 const EARTH_RADIUS_METERS = 6371000;
+const PARKING_SIGN_FACE_HEIGHT_METERS = 0.75;
 
 /**
  * Project a point from a start lat/lng by distance and bearing.
@@ -1114,50 +1115,64 @@ function projectLatLng(lat, lng, distanceMeters, bearingDegrees) {
     };
 }
 
+function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+}
+
 /**
- * Estimate the real-world location of a detected sign using pitch-based distance estimation.
- *
- * The idea: if the camera is at a known height and the sign appears at a negative pitch
- * (below the horizon), we can compute the ground distance using trigonometry:
- *
- *   distance = cameraHeight / tan(|pitch|)
- *
- * Then we project that distance along the sign's compass heading from the camera position.
+ * Estimate sign distance from its apparent angular height.
+ * Smaller boxes should expand non-linearly so far-away signs do not collapse
+ * onto the same few meters as nearby curbside signs.
+ */
+function estimateDistanceFromAngularSize(angularHeight) {
+    const safeAngularHeight = clamp(angularHeight || 0, 0.6, 25);
+    const angularHeightRad = safeAngularHeight * Math.PI / 180;
+    const geometricDistance =
+        PARKING_SIGN_FACE_HEIGHT_METERS / (2 * Math.tan(angularHeightRad / 2));
+
+    const farSignFactor = clamp((3.5 - safeAngularHeight) / 3, 0, 1);
+    const boostedDistance = geometricDistance * (1 + 1.8 * Math.pow(farSignFactor, 2));
+
+    return clamp(boostedDistance, 3, 80);
+}
+
+/**
+ * Estimate sign distance from downward pitch.
+ */
+function estimateDistanceFromPitch(pitch, cameraHeight = SV_CAMERA_HEIGHT) {
+    if (pitch >= -0.35) {
+        return null;
+    }
+
+    const absPitchRad = Math.abs(pitch) * Math.PI / 180;
+    const pitchDistance = cameraHeight / Math.tan(absPitchRad);
+    return clamp(pitchDistance, 3, 80);
+}
+
+/**
+ * Estimate the real-world location of a detected sign.
+ * Uses pitch for nearby curbside signs, then increasingly trusts angular size
+ * as boxes get smaller so down-the-street signs project farther out on the map.
  *
  * @param {number} cameraLat - Panorama camera latitude
  * @param {number} cameraLng - Panorama camera longitude
- * @param {Object} detection - Detection with {heading, pitch, confidence, class_name}
+ * @param {Object} detection - Detection with {heading, pitch, angularHeight, confidence, class_name}
  * @param {number} [cameraHeight=2.5] - Camera height in meters
  * @returns {Object|null} {lat, lng, distance, heading, confidence, class_name} or null if unusable
  */
 function estimateSignLocation(cameraLat, cameraLng, detection, cameraHeight = SV_CAMERA_HEIGHT) {
-    const pitch = detection.pitch;
+    const pitchDistance = estimateDistanceFromPitch(detection.pitch, cameraHeight);
+    const sizeDistance = estimateDistanceFromAngularSize(detection.angularHeight);
 
-    // Signs at or above horizon can't be distance-estimated via pitch
-    // Use a minimum downward angle of -1° to avoid huge/infinite distances
-    if (pitch >= -1) {
-        // Fallback: place at a fixed distance of 10m
-        const fallbackDistanceMeters = 10;
-        const dest = projectLatLng(cameraLat, cameraLng, fallbackDistanceMeters, detection.heading);
-        return {
-            lat: dest.lat,
-            lng: dest.lng,
-            distance: fallbackDistanceMeters,
-            heading: detection.heading,
-            confidence: detection.confidence,
-            class_name: detection.class_name,
-            method: 'fallback'
-        };
+    let distance = sizeDistance;
+    let method = 'size';
+
+    if (pitchDistance != null) {
+        const farSignWeight = clamp((3.5 - clamp(detection.angularHeight || 0, 0.6, 25)) / 3, 0, 1);
+        distance = pitchDistance + (Math.max(pitchDistance, sizeDistance) - pitchDistance) * farSignWeight;
+        method = farSignWeight > 0.15 ? 'pitch+size' : 'pitch';
     }
 
-    // Pitch-based distance: distance = height / tan(|pitch|)
-    const absPitchRad = Math.abs(pitch) * Math.PI / 180;
-    let distance = cameraHeight / Math.tan(absPitchRad);
-
-    // Clamp to reasonable range (3m – 50m)
-    distance = Math.max(3, Math.min(50, distance));
-
-    // Project from camera position along the sign's heading
     const dest = projectLatLng(cameraLat, cameraLng, distance, detection.heading);
 
     return {
@@ -1167,7 +1182,7 @@ function estimateSignLocation(cameraLat, cameraLng, detection, cameraHeight = SV
         heading: detection.heading,
         confidence: detection.confidence,
         class_name: detection.class_name,
-        method: 'pitch'
+        method
     };
 }
 

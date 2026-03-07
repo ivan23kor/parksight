@@ -426,8 +426,10 @@
             console.log('Loaded sign map data on ui-map:', data);
             streetViewDotsLayer.clearLayers();
 
+            const projectedMarkerRadius = 10 / 3;
+
             const cameraCircle = L.circle([data.camera.lat, data.camera.lng], {
-                radius: 20,
+                radius: projectedMarkerRadius,
                 color: '#dc2626',
                 fillColor: '#ef4444',
                 weight: 2,
@@ -444,7 +446,7 @@
 
             for (const sign of data.signs || []) {
                 const signCircle = L.circle([sign.lat, sign.lng], {
-                    radius: 10,
+                    radius: projectedMarkerRadius,
                     color: '#16a34a',
                     fillColor: '#22c55e',
                     weight: 2,
