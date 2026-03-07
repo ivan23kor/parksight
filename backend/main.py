@@ -74,9 +74,12 @@ class SignPreviewRequest(BaseModel):
     angular_height: float
     confidence: float = 0.0
     api_key: str
-    padding: float = 2.2
-    width: int = 640
+    padding: float = 1.2
+    vertical_padding: float = 2.8
+    width: int = 320
     height: int = 640
+    crop_width_ratio: float = 1 / 7
+    crop_height_ratio: float = 1 / 2
     save: bool = False
     include_image: bool = True
 
@@ -463,12 +466,22 @@ async def preview_sign(request: SignPreviewRequest):
     width = max(64, min(request.width, 640))
     height = max(64, min(request.height, 640))
 
-    # Street View Static API bottoms out around a 10 degree FOV. Use the
-    # detection's larger angular dimension plus padding, but keep the preview
-    # from zooming out too much for larger sign groups.
-    sign_span = max(abs(request.angular_width), abs(request.angular_height), 0.1)
-    requested_fov = sign_span * max(request.padding, 1.0)
-    fov = max(10.0, min(40.0, requested_fov))
+    # Street View's FOV is horizontal. Keep the horizontal framing tight and
+    # rely on a tall aspect ratio to preserve more context above and below.
+    horizontal_padding = max(request.padding, 1.0)
+    vertical_padding = max(request.vertical_padding, 1.0)
+    aspect_scale = height / width
+
+    horizontal_fov = max(abs(request.angular_width), 0.1) * horizontal_padding
+    required_vertical_fov = max(abs(request.angular_height), 0.1) * vertical_padding
+    vertical_fit_horizontal_fov = math.degrees(
+        2.0
+        * math.atan(
+            math.tan(math.radians(required_vertical_fov) / 2.0) / aspect_scale
+        )
+    )
+    requested_fov = max(horizontal_fov, vertical_fit_horizontal_fov)
+    fov = max(10.0, min(25.0, requested_fov))
 
     image_url = build_streetview_url(
         request.pano_id,
@@ -491,6 +504,21 @@ async def preview_sign(request: SignPreviewRequest):
         image = Image.open(io.BytesIO(resp.content)).convert("RGB")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to decode sign preview: {e}")
+
+    crop_width_ratio = min(max(request.crop_width_ratio, 0.05), 1.0)
+    crop_height_ratio = min(max(request.crop_height_ratio, 0.05), 1.0)
+    crop_width = max(1, round(image.width * crop_width_ratio))
+    crop_height = max(1, round(image.height * crop_height_ratio))
+    crop_left = max(0, (image.width - crop_width) // 2)
+    crop_top = max(0, (image.height - crop_height) // 2)
+    image = image.crop(
+        (
+            crop_left,
+            crop_top,
+            crop_left + crop_width,
+            crop_top + crop_height,
+        )
+    )
 
     filename = None
     if request.save:
