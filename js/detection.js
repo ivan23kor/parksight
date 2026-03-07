@@ -1075,6 +1075,7 @@ async function cropAndSaveSign(det, cropCenterOverride = null) {
 const SV_CAMERA_HEIGHT = 2.5;
 const EARTH_RADIUS_METERS = 6371000;
 const PARKING_SIGN_FACE_HEIGHT_METERS = 0.75;
+const CURB_OFFSET_METERS = 6;
 
 /**
  * Project a point from a start lat/lng by distance and bearing.
@@ -1117,6 +1118,53 @@ function projectLatLng(lat, lng, distanceMeters, bearingDegrees) {
 
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
+}
+
+function normalizeBearingDegrees(bearing) {
+    return ((bearing % 360) + 360) % 360;
+}
+
+function signedAngleDeltaDegrees(a, b) {
+    return ((a - b + 540) % 360) - 180;
+}
+
+function projectSignedDistance(lat, lng, distanceMeters, bearingDegrees) {
+    const normalizedBearing = normalizeBearingDegrees(bearingDegrees);
+    if (distanceMeters >= 0) {
+        return projectLatLng(lat, lng, distanceMeters, normalizedBearing);
+    }
+    return projectLatLng(lat, lng, Math.abs(distanceMeters), normalizedBearing + 180);
+}
+
+function getTrafficBearing(streetBearing, oneway = null) {
+    let bearing = normalizeBearingDegrees(streetBearing);
+    if (oneway === '-1') {
+        bearing = (bearing + 180) % 360;
+    }
+    return bearing;
+}
+
+function projectSignToCurbLine(cameraLat, cameraLng, distanceMeters, signHeading, options = {}) {
+    const { streetBearing, side = 'right', oneway = null, curbOffsetMeters = CURB_OFFSET_METERS } = options;
+    if (streetBearing == null) {
+        return null;
+    }
+
+    const trafficBearing = getTrafficBearing(streetBearing, oneway);
+    const lateralBearing = side === 'left'
+        ? trafficBearing - 90
+        : trafficBearing + 90;
+    const curbOrigin = projectLatLng(cameraLat, cameraLng, curbOffsetMeters, lateralBearing);
+    const headingDelta = signedAngleDeltaDegrees(signHeading, trafficBearing);
+    const alongStreetDistance = distanceMeters * Math.cos(headingDelta * Math.PI / 180);
+
+    return {
+        ...projectSignedDistance(curbOrigin.lat, curbOrigin.lng, alongStreetDistance, trafficBearing),
+        alongStreetDistance,
+        curbOffsetMeters,
+        trafficBearing,
+        side
+    };
 }
 
 /**
@@ -1192,9 +1240,31 @@ function estimateSignLocation(cameraLat, cameraLng, detection, cameraHeight = SV
  * @param {number} cameraLng - Panorama camera longitude
  * @returns {Array} Array of estimated sign locations
  */
-function estimateAllSignLocations(cameraLat, cameraLng) {
+function estimateAllSignLocations(cameraLat, cameraLng, options = null) {
     return currentDetections
-        .map(det => estimateSignLocation(cameraLat, cameraLng, det))
+        .map(det => {
+            const estimate = estimateSignLocation(cameraLat, cameraLng, det);
+            if (!estimate) return null;
+
+            const curbAligned = options
+                ? projectSignToCurbLine(cameraLat, cameraLng, estimate.distance, det.heading, options)
+                : null;
+
+            if (!curbAligned) {
+                return estimate;
+            }
+
+            return {
+                ...estimate,
+                lat: curbAligned.lat,
+                lng: curbAligned.lng,
+                alongStreetDistance: curbAligned.alongStreetDistance,
+                curbOffsetMeters: curbAligned.curbOffsetMeters,
+                trafficBearing: curbAligned.trafficBearing,
+                side: curbAligned.side,
+                method: `${estimate.method}+curb`
+            };
+        })
         .filter(loc => loc !== null);
 }
 
