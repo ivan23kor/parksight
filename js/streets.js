@@ -100,7 +100,15 @@ function sampleStreetPoints(way, intervalMeters = 50) {
                 lon,
                 bearing,
                 oneway: way.tags.oneway || null,
-                streetName: way.tags.name || 'Unknown street'
+                streetName: way.tags.name || 'Unknown street',
+                segmentStart: {
+                    lat: startNode.lat,
+                    lon: startNode.lon
+                },
+                segmentEnd: {
+                    lat: endNode.lat,
+                    lon: endNode.lon
+                }
             });
         }
     }

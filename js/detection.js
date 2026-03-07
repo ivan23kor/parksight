@@ -1521,17 +1521,43 @@ async function fetchDetectionCropPreview(det, panoId) {
   if (!apiUrl) {
     throw new Error("Detection API not configured");
   }
+  const apiKey = window.GOOGLE_CONFIG?.API_KEY;
+  if (!apiKey) {
+    throw new Error("Google API key not configured");
+  }
 
-  const cropPlan = await buildDetectionCropPlan(det, panoId);
-  const resp = await fetch(`${apiUrl}/crop-sign-tiles`, {
+  const previewPayload = {
+    pano_id: panoId,
+    heading: det.heading,
+    pitch: det.pitch,
+    angular_width: det.angularWidth,
+    angular_height: det.angularHeight,
+    confidence: det.confidence,
+    api_key: apiKey,
+    save: false,
+    include_image: true,
+  };
+
+  let resp = await fetch(`${apiUrl}/preview-sign`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      ...cropPlan.requestBody,
-      save: true,
-      include_image: true,
-    }),
+    body: JSON.stringify(previewPayload),
   });
+
+  // Compatibility path for an already-running backend that has not been
+  // restarted yet and therefore does not expose /preview-sign.
+  if (resp.status === 404) {
+    const cropPlan = await buildDetectionCropPlan(det, panoId);
+    resp = await fetch(`${apiUrl}/crop-sign-tiles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...cropPlan.requestBody,
+        save: false,
+        include_image: true,
+      }),
+    });
+  }
 
   if (!resp.ok) {
     const errText = await resp.text();
@@ -1644,6 +1670,66 @@ function projectSignedDistance(lat, lng, distanceMeters, bearingDegrees) {
   );
 }
 
+function latLngToLocalMeters(lat, lng, originLat, originLng) {
+  const latScale = 111320;
+  const lngScale =
+    111320 * Math.cos((originLat * Math.PI) / 180);
+  return {
+    x: (lng - originLng) * lngScale,
+    y: (lat - originLat) * latScale,
+  };
+}
+
+function localMetersToLatLng(x, y, originLat, originLng) {
+  const latScale = 111320;
+  const lngScale =
+    111320 * Math.cos((originLat * Math.PI) / 180);
+  return {
+    lat: originLat + y / latScale,
+    lng: originLng + x / lngScale,
+  };
+}
+
+function getStreetCenterlineAnchor(cameraLat, cameraLng, options = {}) {
+  const { segmentStart, segmentEnd } = options;
+  if (!segmentStart || !segmentEnd) {
+    return { lat: cameraLat, lng: cameraLng };
+  }
+
+  const originLat = (segmentStart.lat + segmentEnd.lat) / 2;
+  const originLng = (segmentStart.lon + segmentEnd.lon) / 2;
+  const a = latLngToLocalMeters(
+    segmentStart.lat,
+    segmentStart.lon,
+    originLat,
+    originLng,
+  );
+  const b = latLngToLocalMeters(
+    segmentEnd.lat,
+    segmentEnd.lon,
+    originLat,
+    originLng,
+  );
+  const p = latLngToLocalMeters(cameraLat, cameraLng, originLat, originLng);
+
+  const abx = b.x - a.x;
+  const aby = b.y - a.y;
+  const abLenSq = abx * abx + aby * aby;
+  if (abLenSq <= 1e-6) {
+    return { lat: cameraLat, lng: cameraLng };
+  }
+
+  const apx = p.x - a.x;
+  const apy = p.y - a.y;
+  const t = clamp((apx * abx + apy * aby) / abLenSq, 0, 1);
+  const projected = {
+    x: a.x + abx * t,
+    y: a.y + aby * t,
+  };
+
+  return localMetersToLatLng(projected.x, projected.y, originLat, originLng);
+}
+
 function getTrafficBearing(streetBearing, oneway = null) {
   let bearing = normalizeBearingDegrees(streetBearing);
   if (oneway === "-1") {
@@ -1664,41 +1750,35 @@ function projectSignToCurbLine(
     side = "right",
     oneway = null,
     curbOffsetMeters = CURB_OFFSET_METERS,
+    segmentStart = null,
+    segmentEnd = null,
   } = options;
   if (streetBearing == null) {
     return null;
   }
 
   const trafficBearing = getTrafficBearing(streetBearing, oneway);
+  const centerlineAnchor = getStreetCenterlineAnchor(cameraLat, cameraLng, {
+    segmentStart,
+    segmentEnd,
+  });
   const lateralBearing =
     side === "left" ? trafficBearing - 90 : trafficBearing + 90;
   const curbOrigin = projectLatLng(
-    cameraLat,
-    cameraLng,
+    centerlineAnchor.lat,
+    centerlineAnchor.lng,
     curbOffsetMeters,
     lateralBearing,
   );
   const headingDelta = signedAngleDeltaDegrees(signHeading, trafficBearing);
   const headingDeltaRad = (headingDelta * Math.PI) / 180;
-  const sideSign = side === "left" ? -1 : 1;
-
-  // Keep the sign on the curb by following the detection ray only until it
-  // reaches the street edge. This prevents far detections from sliding deep
-  // into adjacent buildings on wide or oblique streets.
   const rawAlongStreetDistance = distanceMeters * Math.cos(headingDeltaRad);
-  const rawLateralDistance =
-    sideSign * distanceMeters * Math.sin(headingDeltaRad);
 
-  let alongStreetDistance = rawAlongStreetDistance;
-
-  // If the detection ray points back across the street, it never intersects
-  // the requested curb. Snap to the perpendicular curb projection instead of
-  // inventing a false offset along the block.
-  if (rawLateralDistance <= 0) {
-    alongStreetDistance = 0;
-  } else if (rawLateralDistance > curbOffsetMeters + 0.25) {
-    alongStreetDistance *= curbOffsetMeters / rawLateralDistance;
-  }
+  // Keep markers on the selected curb, but preserve the sign's progress along
+  // the block. The previous "intersect the curb ray" clamp collapsed
+  // straight-ahead signs back onto the pano point because their lateral offset
+  // was near zero even when they were clearly far down the street.
+  const alongStreetDistance = clamp(rawAlongStreetDistance, -distanceMeters, distanceMeters);
 
   return {
     ...projectSignedDistance(
@@ -1709,7 +1789,6 @@ function projectSignToCurbLine(
     ),
     alongStreetDistance,
     rawAlongStreetDistance,
-    rawLateralDistance,
     curbOffsetMeters,
     trafficBearing,
     side,

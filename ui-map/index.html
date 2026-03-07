@@ -1102,6 +1102,8 @@
           side: DEFAULT_SIDE,
           streetBearing: point.bearing,
           oneway: point.oneway || null,
+          segmentStart: point.segmentStart || null,
+          segmentEnd: point.segmentEnd || null,
           streetName: point.streetName || "Unknown street",
         };
 
@@ -1156,19 +1158,23 @@
         }
 
         const idx = currentDetectionContext?.pointIndex;
-        const fallbackPosition = detectionPanorama?.getPosition?.();
-        const cameraLat =
-          idx != null && currentPoints[idx]
-            ? currentPoints[idx].lat
-            : (fallbackPosition?.lat?.() ?? INITIAL_LOCATION.lat);
-        const cameraLng =
-          idx != null && currentPoints[idx]
-            ? currentPoints[idx].lon
-            : (fallbackPosition?.lng?.() ?? INITIAL_LOCATION.lon);
+        const panoramaPosition = detectionPanorama?.getPosition?.();
+        const panoramaLat = panoramaPosition?.lat?.();
+        const panoramaLng = panoramaPosition?.lng?.();
+        const sampledPoint =
+          idx != null && currentPoints[idx] ? currentPoints[idx] : null;
+        const cameraLat = Number.isFinite(panoramaLat)
+          ? panoramaLat
+          : (sampledPoint?.lat ?? INITIAL_LOCATION.lat);
+        const cameraLng = Number.isFinite(panoramaLng)
+          ? panoramaLng
+          : (sampledPoint?.lon ?? INITIAL_LOCATION.lon);
         const signLocations = estimateAllSignLocations(cameraLat, cameraLng, {
           streetBearing: currentDetectionContext.streetBearing,
           oneway: currentDetectionContext.oneway,
           side: getProjectionSide(currentDetectionContext.side),
+          segmentStart: currentDetectionContext.segmentStart || null,
+          segmentEnd: currentDetectionContext.segmentEnd || null,
         });
         const detectedPanoId =
           detectionPanorama?.getPano?.() || currentDetectionContext.panoId;

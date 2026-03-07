@@ -66,6 +66,21 @@ class CropSignTilesRequest(BaseModel):
     include_image: bool = False
 
 
+class SignPreviewRequest(BaseModel):
+    pano_id: str
+    heading: float
+    pitch: float
+    angular_width: float
+    angular_height: float
+    confidence: float = 0.0
+    api_key: str
+    padding: float = 2.2
+    width: int = 640
+    height: int = 640
+    save: bool = False
+    include_image: bool = True
+
+
 class Detection(BaseModel):
     x1: float
     y1: float
@@ -433,6 +448,67 @@ async def crop_sign_tiles(request: CropSignTilesRequest):
     if request.include_image:
         image_buffer = io.BytesIO()
         cropped.save(image_buffer, format="JPEG", quality=90)
+        response["image_base64"] = base64.b64encode(image_buffer.getvalue()).decode("ascii")
+
+    return response
+
+
+@app.post("/preview-sign")
+async def preview_sign(request: SignPreviewRequest):
+    """
+    Fetch a sign-centered Street View image at the tightest practical FOV.
+    This avoids enlarging a tiny crop from the full panorama when the sign is
+    far down the street.
+    """
+    width = max(64, min(request.width, 640))
+    height = max(64, min(request.height, 640))
+
+    # Street View Static API bottoms out around a 10 degree FOV. Use the
+    # detection's larger angular dimension plus padding, but keep the preview
+    # from zooming out too much for larger sign groups.
+    sign_span = max(abs(request.angular_width), abs(request.angular_height), 0.1)
+    requested_fov = sign_span * max(request.padding, 1.0)
+    fov = max(10.0, min(40.0, requested_fov))
+
+    image_url = build_streetview_url(
+        request.pano_id,
+        request.heading,
+        request.pitch,
+        fov,
+        width,
+        height,
+        request.api_key,
+    )
+
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(image_url, timeout=10.0)
+            resp.raise_for_status()
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=400, detail=f"Failed to fetch sign preview: {e}")
+
+    try:
+        image = Image.open(io.BytesIO(resp.content)).convert("RGB")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to decode sign preview: {e}")
+
+    filename = None
+    if request.save:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{timestamp}_preview_conf{request.confidence:.2f}.jpg"
+        image.save(DETECTED_SIGNS_DIR / filename, quality=95)
+
+    response = {
+        "filename": filename,
+        "image_url": f"/detected-signs/{filename}" if filename else None,
+        "width": image.width,
+        "height": image.height,
+        "fov": fov,
+    }
+
+    if request.include_image:
+        image_buffer = io.BytesIO()
+        image.save(image_buffer, format="JPEG", quality=90)
         response["image_base64"] = base64.b64encode(image_buffer.getvalue()).decode("ascii")
 
     return response
