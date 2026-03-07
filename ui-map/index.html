@@ -98,24 +98,22 @@
 
       #detectionControls {
         position: absolute;
-        top: 16px;
-        left: 16px;
+        top: 0;
+        left: 0;
+        right: 0;
         z-index: 2001;
-        padding: 10px;
-        border-radius: 12px;
-        background: rgba(17, 24, 39, 0.78);
-        backdrop-filter: blur(10px);
+        padding: 16px;
       }
 
       #detectionControls button {
+        width: 100%;
         background: rgba(255, 255, 255, 0.92);
         color: #333;
         border: none;
-        padding: 10px 16px;
+        padding: 12px 16px;
         border-radius: 8px;
         cursor: pointer;
         font-size: 14px;
-        margin-right: 0;
       }
 
       #detectionControls button:hover {
@@ -368,6 +366,7 @@
       // Store point data for click handlers
       let currentPoints = [];
       let currentPanoIds = [];
+      let latestRenderedSignMapData = null;
       const SIGN_MAP_STORAGE_KEY = "parksight_latest_sign_map_data";
       const SIGN_MAP_PROJECTION_VERSION = 2;
       const INITIAL_LOCATION = { lat: 42.3615, lon: -71.0921 };
@@ -495,6 +494,7 @@
       }
 
       function renderSignMapData(data) {
+        latestRenderedSignMapData = data;
         signMarkersLayer.clearLayers();
 
         const detections = data?.detections || [];
@@ -541,6 +541,10 @@
           boundsPoints.push([detection.camera.lat, detection.camera.lng]);
 
           for (const sign of detection.signs || []) {
+            if (!sign.panoId && detection.panoId) {
+              sign.panoId = detection.panoId;
+            }
+
             const signCircle = L.circle([sign.lat, sign.lng], {
               radius: projectedMarkerRadius,
               color: "#16a34a",
@@ -629,6 +633,11 @@
         sign.previewLoading = true;
 
         try {
+          const previewPanoId = sign.panoId || null;
+          if (!previewPanoId) {
+            throw new Error("Missing panoId for preview");
+          }
+
           const preview = await fetchDetectionCropPreview(
             {
               heading: sign.heading,
@@ -638,20 +647,66 @@
               confidence: sign.confidence,
               class_name: sign.class_name || "parking_sign",
             },
-            sign.panoId,
+            previewPanoId,
           );
 
           sign.previewSrc = preview.src;
           renderSignPreviewContent(container, sign, { src: sign.previewSrc });
+          if (latestRenderedSignMapData) {
+            persistLatestSignMapData(latestRenderedSignMapData);
+          }
         } catch (err) {
           console.error("Failed to load sign preview:", err);
           sign.previewError = "Preview unavailable.";
           renderSignPreviewContent(container, sign, {
             error: sign.previewError,
           });
+          if (latestRenderedSignMapData) {
+            persistLatestSignMapData(latestRenderedSignMapData);
+          }
         } finally {
           sign.previewLoading = false;
         }
+      }
+
+      async function hydrateDetectionPreviews(signs, panoId) {
+        if (!Array.isArray(signs) || signs.length === 0 || !panoId) {
+          return signs || [];
+        }
+
+        await Promise.allSettled(
+          signs.map(async (sign) => {
+            sign.panoId = sign.panoId || panoId;
+
+            if (
+              sign.previewSrc ||
+              !Number.isFinite(sign.heading) ||
+              !Number.isFinite(sign.pitch)
+            ) {
+              return;
+            }
+
+            try {
+              const preview = await fetchDetectionCropPreview(
+                {
+                  heading: sign.heading,
+                  pitch: sign.pitch,
+                  angularWidth: sign.angularWidth,
+                  angularHeight: sign.angularHeight,
+                  confidence: sign.confidence,
+                  class_name: sign.class_name || "parking_sign",
+                },
+                sign.panoId,
+              );
+              sign.previewSrc = preview.src;
+              delete sign.previewError;
+            } catch (err) {
+              console.error("Failed to prefetch sign preview:", err);
+            }
+          }),
+        );
+
+        return signs;
       }
 
       /**
@@ -1089,7 +1144,7 @@
           });
           if (currentDetections.length > 0) {
             try {
-              plotDetectedSigns();
+              await plotDetectedSigns();
             } catch (plotErr) {
               console.error("plotDetectedSigns error:", plotErr);
             }
@@ -1105,7 +1160,7 @@
       /**
        * Plot the current panorama point and projected sign locations on the map.
        */
-      function plotDetectedSigns() {
+      async function plotDetectedSigns() {
         if (currentDetections.length === 0 || !currentDetectionContext) {
           console.warn("plotDetectedSigns: nothing to render");
           return;
@@ -1126,10 +1181,13 @@
           oneway: currentDetectionContext.oneway,
           side: currentDetectionContext.side,
         });
+        const detectedPanoId =
+          detectionPanorama?.getPano?.() || currentDetectionContext.panoId;
+        await hydrateDetectionPreviews(signLocations, detectedPanoId);
         const detectionEntry = {
           savedAt: Date.now(),
           source: "ui-map",
-          panoId: currentDetectionContext.panoId,
+          panoId: detectedPanoId,
           camera: {
             lat: cameraLat,
             lng: cameraLng,
