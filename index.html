@@ -379,7 +379,7 @@
       let currentPanoIds = [];
       let latestRenderedSignMapData = null;
       const SIGN_MAP_STORAGE_KEY = "parksight_latest_sign_map_data";
-      const SIGN_MAP_PROJECTION_VERSION = 5;
+      const SIGN_MAP_PROJECTION_VERSION = 6;
       const INITIAL_LOCATION = { lat: 42.3615, lon: -71.0921 };
       const DEFAULT_SIDE = "right";
       const BASE_HEADING = 90;
@@ -1762,6 +1762,8 @@
           side: getProjectionSide(roadContext.side),
           highway: roadContext.highway || null,
           lanes: roadContext.lanes || null,
+          wayGeometry: roadContext.wayGeometry || null,
+          segmentIndex: roadContext.segmentIndex ?? null,
           segmentStart: roadContext.segmentStart || null,
           segmentEnd: roadContext.segmentEnd || null,
         });
