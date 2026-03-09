@@ -71,35 +71,6 @@
         background: #005a87;
       }
 
-      #progressContainer {
-        opacity: 0;
-        transition: opacity 0.3s ease;
-      }
-
-      #progressContainer.visible {
-        opacity: 1;
-      }
-
-      #progressBar.indeterminate {
-        background: linear-gradient(
-          90deg,
-          #007cba 30%,
-          #005a87 50%,
-          #007cba 70%
-        );
-        background-size: 200% 100%;
-        animation: indeterminate 1.5s infinite;
-      }
-
-      @keyframes indeterminate {
-        0% {
-          background-position: -200% 0;
-        }
-        100% {
-          background-position: 200% 0;
-        }
-      }
-
       #detectionControls {
         position: absolute;
         top: 0;
@@ -273,65 +244,6 @@
       </section>
     </div>
 
-    <!-- Progress Bar Container -->
-    <div
-      id="progressContainer"
-      style="
-        display: none;
-        position: fixed;
-        top: 0;
-        left: 50%;
-        transform: translateX(-50%);
-        z-index: 1500;
-        background: white;
-        padding: 15px 30px;
-        border-radius: 0 0 8px 8px;
-        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-        min-width: 350px;
-      "
-    >
-      <div
-        id="progressText"
-        style="
-          margin-bottom: 8px;
-          font-size: 14px;
-          color: #333;
-          text-align: center;
-        "
-      >
-        Loading...
-      </div>
-      <div
-        style="
-          width: 100%;
-          height: 6px;
-          background: #e0e0e0;
-          border-radius: 3px;
-          overflow: hidden;
-        "
-      >
-        <div
-          id="progressBar"
-          style="
-            height: 100%;
-            background: #007cba;
-            width: 0%;
-            transition: width 0.3s ease;
-            border-radius: 3px;
-          "
-        ></div>
-      </div>
-      <div
-        id="progressDetails"
-        style="
-          margin-top: 5px;
-          font-size: 12px;
-          color: #666;
-          text-align: center;
-        "
-      ></div>
-    </div>
-
     <!-- External Libraries -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
@@ -365,16 +277,9 @@
     <script>
       // Global state
       let map;
-      let streetsLayer;
-      let streetViewDotsLayer;
-      let selectionLayer;
       let signMarkersLayer;
-      let isSelecting = false;
-      let isDrawingRect = false;
-      let selectionStart = null;
-      let selectionRect = null;
 
-      // Store point data for click handlers
+      // Store point data for detection context
       let currentPoints = [];
       let currentPanoIds = [];
       let latestRenderedSignMapData = null;
@@ -755,7 +660,6 @@
         }
 
         console.log("Loaded sign map data on parksight:", data);
-        streetViewDotsLayer.clearLayers();
 
         const projectedMarkerRadius = 10 / 3;
         const boundsPoints = [];
@@ -1269,10 +1173,7 @@
         }).addTo(map);
 
         // Initialize layers
-        streetsLayer = L.layerGroup().addTo(map);
-        streetViewDotsLayer = L.layerGroup().addTo(map);
         signMarkersLayer = L.layerGroup().addTo(map);
-        selectionLayer = L.layerGroup().addTo(map);
 
         // Set up event handlers
         setupEventHandlers();
@@ -1311,81 +1212,52 @@
           .getElementById("clearProjectedSignsBtn")
           .addEventListener("click", clearProjectedSigns);
 
-        // Hold Ctrl to enable selection mode
-        document.addEventListener("keydown", (e) => {
-          if (e.key === "Control" || e.ctrlKey) {
-            isSelecting = true;
-            map.getContainer().style.cursor = "crosshair";
-          }
-        });
+        // Click map to open closest panorama
+        map.on("click", async (e) => {
+          const clickLat = e.latlng.lat;
+          const clickLng = e.latlng.lng;
 
-        document.addEventListener("keyup", (e) => {
-          if (e.key === "Control") {
-            if (!isDrawingRect) {
-              isSelecting = false;
-              map.getContainer().style.cursor = "";
-              map.dragging.enable();
-              map.doubleClickZoom.enable();
+          const statusEl = document.getElementById("detectionStatus");
+          statusEl.textContent = "Finding nearest Street View...";
+
+          const svService = new google.maps.StreetViewService();
+          try {
+            const response = await svService.getPanorama({
+              location: { lat: clickLat, lng: clickLng },
+              radius: 100,
+              preference: google.maps.StreetViewPreference.NEAREST,
+              source: google.maps.StreetViewSource.OUTDOOR,
+            });
+            const panoData = response.data;
+            if (!panoData?.location?.pano) {
+              statusEl.textContent = "No Street View coverage nearby.";
+              return;
             }
-          }
-        });
 
-        // Ctrl+Click shortcut for selection
-        map.on("mousedown", (e) => {
-          if (e.originalEvent.ctrlKey || e.originalEvent.metaKey) {
-            e.originalEvent.preventDefault();
-            startRectangleSelection(e.latlng);
-          }
-        });
+            const panoId = panoData.location.pano;
+            const panoLatLng = panoData.location.latLng;
+            const panoLat = panoLatLng.lat();
+            const panoLng = panoLatLng.lng();
 
-        // Regular selection mode mousedown
-        map.on("mousedown", (e) => {
-          if (
-            !isSelecting ||
-            e.originalEvent.ctrlKey ||
-            e.originalEvent.metaKey
-          )
-            return;
-          L.DomEvent.preventDefault(e.originalEvent);
-          L.DomEvent.stopPropagation(e.originalEvent);
-          startRectangleSelection(e.latlng);
-        });
+            // Compute heading from pano position toward the clicked point
+            const heading = bearingBetweenPoints(panoLat, panoLng, clickLat, clickLng);
 
-        // Mouse move during selection
-        map.on("mousemove", (e) => {
-          if (!isDrawingRect || !selectionRect) return;
-          L.DomEvent.preventDefault(e.originalEvent);
-          L.DomEvent.stopPropagation(e.originalEvent);
-          const bounds = L.latLngBounds(selectionStart, e.latlng);
-          selectionRect.setBounds(bounds);
-        });
+            currentDetectionContext = {
+              panoId,
+              heading: (calculateHeadingWithSide(heading, DEFAULT_SIDE) + 180) % 360,
+              pointIndex: null,
+              side: DEFAULT_SIDE,
+              streetBearing: heading,
+              oneway: null,
+              streetName: panoData.location.description || "Unknown street",
+            };
 
-        // Mouse up to complete selection
-        map.on("mouseup", async (e) => {
-          if (!isDrawingRect || !selectionRect) return;
-          L.DomEvent.preventDefault(e.originalEvent);
-          L.DomEvent.stopPropagation(e.originalEvent);
-
-          const bounds = selectionRect.getBounds();
-          selectionRect.remove();
-          selectionRect = null;
-          isDrawingRect = false;
-
-          // Re-enable map controls
-          map.getContainer().style.cursor = "";
-          map.dragging.enable();
-          map.doubleClickZoom.enable();
-
-          await onSelectionComplete(bounds);
-        });
-
-        // Click to cancel selection mode
-        map.on("click", () => {
-          if (isSelecting && !isDrawingRect) {
-            isSelecting = false;
-            map.getContainer().style.cursor = "";
-            map.dragging.enable();
-            map.doubleClickZoom.enable();
+            // Fetch road context for better projection
+            await ensureDetectionRoadContext(panoLat, panoLng);
+            initPanoramaForContext();
+          } catch (err) {
+            console.error("Street View lookup failed:", err);
+            statusEl.textContent = "No Street View coverage nearby.";
           }
         });
       }
@@ -1426,196 +1298,6 @@
         }
       }
 
-      /**
-       * Start rectangle selection.
-       */
-      function startRectangleSelection(latlng) {
-        isSelecting = false;
-        isDrawingRect = true;
-        selectionStart = latlng;
-        map.getContainer().style.cursor = "crosshair";
-        map.dragging.disable();
-        map.doubleClickZoom.disable();
-
-        selectionRect = L.rectangle(
-          [
-            [latlng.lat, latlng.lng],
-            [latlng.lat, latlng.lng],
-          ],
-          { color: "#007bff", weight: 2, fillOpacity: 0.1, dashArray: "5, 5" },
-        ).addTo(selectionLayer);
-      }
-
-      /**
-       * Handle completed area selection.
-       */
-      async function onSelectionComplete(bounds) {
-        try {
-          // Clear previous results
-          streetViewDotsLayer.clearLayers();
-          currentPoints = [];
-          currentPanoIds = [];
-
-          // Step 1: Fetch streets
-          showProgress("Fetching streets...");
-          const rawStreets = await fetchStreets(bounds);
-
-          if (rawStreets.length === 0) {
-            showProgress("No streets found in selected area", false);
-            setTimeout(hideProgress, 2000);
-            return;
-          }
-
-          // Clip streets to selection bounds
-          const streets = clipStreetsToBounds(rawStreets, bounds);
-
-          // Display streets on map
-          displayStreets(streets);
-
-          // Step 2: Sample points along streets
-          showProgress(
-            `Found ${streets.length} streets. Sampling viewpoints...`,
-          );
-          const allPoints = streets.flatMap((s) => sampleStreetPoints(s, 50));
-
-          if (allPoints.length === 0) {
-            showProgress("No viewpoints generated", false);
-            setTimeout(hideProgress, 2000);
-            return;
-          }
-
-          // Step 3: Get session token
-          showProgress(
-            `Checking Street View coverage for ${allPoints.length} points...`,
-          );
-          let session;
-          try {
-            session = await getSessionToken();
-          } catch (err) {
-            showError(`Session error: ${err.message}`);
-            hideProgress();
-            return;
-          }
-
-          // Step 4: Batch fetch panoIds
-          const panoIds = [];
-          const BATCH_SIZE = 100;
-
-          for (let i = 0; i < allPoints.length; i += BATCH_SIZE) {
-            const batch = allPoints.slice(i, i + BATCH_SIZE);
-            updateProgress(
-              Math.round((i / allPoints.length) * 100),
-              `Checking batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(allPoints.length / BATCH_SIZE)}...`,
-            );
-
-            try {
-              const ids = await fetchPanoIds(batch, session);
-              panoIds.push(...ids);
-            } catch (err) {
-              console.error("Batch fetch error:", err);
-              showError(`Coverage check failed: ${err.message}`);
-              hideProgress();
-              return;
-            }
-
-            // Small delay between batches to avoid rate limiting
-            await new Promise((resolve) => setTimeout(resolve, 50));
-          }
-
-          // Step 5: Filter to points with coverage
-          const coveredPoints = [];
-          const coveredPanoIds = [];
-
-          for (let i = 0; i < allPoints.length; i++) {
-            if (panoIds[i] && panoIds[i] !== "") {
-              coveredPoints.push(allPoints[i]);
-              coveredPanoIds.push(panoIds[i]);
-            }
-          }
-
-          if (coveredPoints.length === 0) {
-            showProgress("No Street View coverage in selected area", false);
-            setTimeout(hideProgress, 2000);
-            return;
-          }
-
-          // Step 6: Display dots
-          currentPoints = coveredPoints;
-          currentPanoIds = coveredPanoIds;
-          displayDots(coveredPoints, coveredPanoIds);
-
-          showProgress("Complete!", false);
-          updateProgress(
-            100,
-            `Found ${coveredPoints.length} Street View locations`,
-          );
-          setTimeout(hideProgress, 2000);
-        } catch (err) {
-          console.error("Selection error:", err);
-          let msg = err.message;
-          if (msg.includes("504")) {
-            msg = "Selection too narrow. Try selecting a larger area.";
-          }
-          showError(msg);
-          hideProgress();
-        }
-      }
-
-      /**
-       * Display streets on the map.
-       */
-      function displayStreets(streets) {
-        const geojson = waysToGeoJSON(streets);
-
-        L.geoJSON(geojson, {
-          style: {
-            color: "#333",
-            weight: 3,
-            opacity: 0.7,
-          },
-          onEachFeature: (feature, layer) => {
-            const name = feature.properties.name;
-            const type = feature.properties.highway;
-            const oneway = feature.properties.oneway;
-            layer.bindPopup(`
-                        <strong>${name}</strong><br>
-                        Type: ${type}<br>
-                        ${oneway ? `One-way: ${oneway}` : "Two-way"}
-                    `);
-          },
-        }).addTo(streetsLayer);
-      }
-
-      /**
-       * Display Street View coverage dots.
-       */
-      function displayDots(points, panoIds) {
-        for (let i = 0; i < points.length; i++) {
-          const point = points[i];
-          const panoId = panoIds[i];
-
-          const dot = L.circleMarker([point.lat, point.lon], {
-            radius: 6,
-            fillColor: "#4285f4",
-            color: "#1a73e8",
-            weight: 2,
-            opacity: 0.9,
-            fillOpacity: 0.7,
-          }).addTo(streetViewDotsLayer);
-
-          // Store index for click handler
-          dot.pointIndex = i;
-
-          dot.on("click", () => onDotClick(i));
-
-          // Tooltip with street name
-          dot.bindTooltip(point.streetName, {
-            permanent: false,
-            direction: "top",
-          });
-        }
-      }
-
       // Store current detection context
       let currentDetectionContext = null;
 
@@ -1648,13 +1330,6 @@
         }
 
         infoEl.textContent = parts.join(" • ");
-      }
-
-      /**
-       * Handle dot click - run detection and show results.
-       */
-      async function onDotClick(index) {
-        await showDetectionForIndex(index);
       }
 
       /**
