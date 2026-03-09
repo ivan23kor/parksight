@@ -1648,7 +1648,7 @@ async function fetchDetectionCropPreview(det, panoId) {
 // Google Street View camera height in meters (roof-mounted camera)
 const SV_CAMERA_HEIGHT = 2.5;
 const EARTH_RADIUS_METERS = 6371000;
-const PARKING_SIGN_FACE_HEIGHT_METERS = 0.75;
+const PARKING_SIGN_FACE_HEIGHT_METERS = 0.45;
 // Approximate lane width and edge inset used to snap detections onto the
 // visible road edge when OSM does not provide explicit width data.
 const DEFAULT_LANE_WIDTH_METERS = 3.2;
@@ -2741,11 +2741,7 @@ function estimateDistanceFromAngularSize(angularHeight) {
   const geometricDistance =
     PARKING_SIGN_FACE_HEIGHT_METERS / (2 * Math.tan(angularHeightRad / 2));
 
-  const farSignFactor = clamp((3.5 - safeAngularHeight) / 3, 0, 1);
-  const boostedDistance =
-    geometricDistance * (1 + 1.8 * Math.pow(farSignFactor, 2));
-
-  return clamp(boostedDistance, 3, 80);
+  return clamp(geometricDistance, 3, 80);
 }
 
 /**
@@ -2785,19 +2781,15 @@ function estimateSignLocation(
   );
   const sizeDistance = estimateDistanceFromAngularSize(distanceAngularHeight);
 
-  let distance = sizeDistance;
-  let method = "size";
+  let distance;
+  let method;
 
   if (pitchDistance != null) {
-    const farSignWeight = clamp(
-      (3.5 - clamp(distanceAngularHeight || 0, 0.6, 25)) / 3,
-      0,
-      1,
-    );
-    distance =
-      pitchDistance +
-      (Math.max(pitchDistance, sizeDistance) - pitchDistance) * farSignWeight;
-    method = farSignWeight > 0.15 ? "pitch+size" : "pitch";
+    distance = pitchDistance;
+    method = "pitch";
+  } else {
+    distance = sizeDistance;
+    method = "size";
   }
 
   const dest = projectLatLng(cameraLat, cameraLng, distance, detection.heading);
