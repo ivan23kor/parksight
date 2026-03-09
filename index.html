@@ -78,6 +78,7 @@
         right: 0;
         z-index: 2001;
         padding: 16px;
+        display: none;
       }
 
       #detectionControls button {
@@ -243,7 +244,7 @@
         </div>
         <div id="detectionPanorama"></div>
         <svg id="detectionOverlay"></svg>
-        <div id="detectionStatus">Loading panorama...</div>
+        <div id="detectionStatus">Tap to detect...</div>
         <div id="detectionInfo"></div>
       </section>
 
@@ -1217,7 +1218,7 @@
       function setupEventHandlers() {
         // Detection pane controls
         document
-          .getElementById("redetectBtn")
+          .getElementById("detectionStatus")
           .addEventListener("click", rerunDetection);
         document
           .getElementById("clearProjectedSignsBtn")
@@ -1567,7 +1568,7 @@
           document.getElementById("detectionPanorama"),
         );
         updateDetectionInfoText();
-        statusEl.textContent = `Click "Detect" to scan (heading: ${Math.round(currentDetectionContext.heading)}°, v2)`;
+        statusEl.textContent = `Tap to detect (heading: ${Math.round(currentDetectionContext.heading)}°)`;
       }
 
       function getProjectionSide(viewSide) {
