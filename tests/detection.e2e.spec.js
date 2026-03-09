@@ -61,6 +61,11 @@ const LEAFLET_STUB = `
     layerGroup() { return new LayerGroup(); },
     circle(latlng, options) { return makeLayer(latlng, options); },
     circleMarker(latlng, options) { return makeLayer(latlng, options); },
+    polyline(latlngs, options) {
+      const layer = makeLayer(latlngs[0], options);
+      layer._latlngs = latlngs;
+      return layer;
+    },
     rectangle(bounds, options) {
       const layer = makeLayer(bounds[0], options);
       layer.setBounds = function setBounds(next) { this._bounds = next; return this; };
@@ -428,6 +433,103 @@ test.describe("detection flow", () => {
     );
     expect(stored).not.toBeNull();
     expect(stored.detections).toHaveLength(1);
+  });
+
+  test("renders a short dashed road marker at each saved panorama point on the 2D map", async ({
+    page,
+  }) => {
+    await mockExternalDependencies(page);
+
+    await page.addInitScript(() => {
+      window.__TEST_PANORAMA_POSITION = { lat: 42.3615, lng: -71.0921 };
+    });
+
+    await page.goto("/?api_key=test-key");
+    await expect(page.locator("#detectionStatus")).toContainText("Click \"Detect\"");
+
+    await page.evaluate(async () => {
+      currentPoints = [
+        {
+          lat: 42.3615,
+          lon: -71.0921,
+          bearing: 36.5,
+          oneway: null,
+          streetName: "Test Street",
+          segmentStart: { lat: 42.3610, lon: -71.0926 },
+          segmentEnd: { lat: 42.3620, lon: -71.0916 },
+        },
+      ];
+      currentPanoIds = ["mock-pano"];
+      await showDetectionForIndex(0);
+    });
+
+    await page.locator("#redetectBtn").click();
+    await expect(page.locator("#detectionStatus")).toContainText("Found 2 parking signs");
+
+    const roadMarkers = await page.evaluate(() =>
+      signMarkersLayer._layers
+        .filter((layer) => layer.options?.dashArray === "10 8")
+        .map((layer) => ({
+          color: layer.options.color,
+          latlngs: layer._latlngs,
+        })),
+    );
+
+    expect(roadMarkers).toHaveLength(1);
+    expect(roadMarkers[0].color).toBe("#f59e0b");
+    expect(roadMarkers[0].latlngs).toHaveLength(2);
+    expect(roadMarkers[0].latlngs[0]).not.toEqual(roadMarkers[0].latlngs[1]);
+  });
+
+  test("resolves road geometry for the default panorama before drawing the 2D road marker", async ({
+    page,
+  }) => {
+    await mockExternalDependencies(page);
+
+    await page.addInitScript(() => {
+      window.__TEST_PANORAMA_POSITION = { lat: 42.3615, lng: -71.0921 };
+    });
+
+    await page.goto("/?api_key=test-key");
+    await expect(page.locator("#detectionStatus")).toContainText('Click "Detect"');
+
+    await page.evaluate(() => {
+      fetchNearestStreetContext = async () => ({
+        bearing: 56.25,
+        oneway: null,
+        highway: "secondary",
+        lanes: null,
+        streetName: "Vassar Street",
+        segmentStart: { lat: 42.361486, lon: -71.092159 },
+        segmentEnd: { lat: 42.361545, lon: -71.092039 },
+        wayGeometry: [
+          { lat: 42.36128, lon: -71.092562 },
+          { lat: 42.361486, lon: -71.092159 },
+          { lat: 42.361545, lon: -71.092039 },
+          { lat: 42.361586, lon: -71.09195 },
+          { lat: 42.361809, lon: -71.091504 },
+        ],
+        segmentIndex: 1,
+      });
+    });
+
+    await page.locator("#redetectBtn").click();
+    await expect(page.locator("#detectionStatus")).toContainText("Found 2 parking signs");
+
+    const roadMarkers = await page.evaluate(() =>
+      signMarkersLayer._layers
+        .filter((layer) => layer.options?.dashArray === "10 8")
+        .map((layer) => layer._latlngs),
+    );
+
+    expect(roadMarkers).toHaveLength(1);
+    expect(roadMarkers[0].length).toBeGreaterThan(2);
+
+    const stored = await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("parksight_latest_sign_map_data")),
+    );
+    expect(stored?.detections?.[0]?.streetName).toBe("Vassar Street");
+    expect(stored?.detections?.[0]?.wayGeometry?.length).toBeGreaterThan(2);
   });
 
   test("renders a road-centerline guide on the panorama and reprojects it with POV changes", async ({
