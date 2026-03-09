@@ -1035,8 +1035,6 @@ function updateDetectionOverlay() {
   // Clear existing boxes (but keep markers)
   overlay.querySelectorAll(":not(.sign-marker)").forEach((el) => el.remove());
 
-  renderRoadGuideOverlay(overlay, pov, fov, width, height);
-
   // Draw each detection if visible
   for (const det of currentDetections) {
     const screen = angularToScreen(
