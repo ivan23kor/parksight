@@ -274,6 +274,24 @@ function perpendicularDistanceMeters(point, segment) {
   return area2 / len;
 }
 
+function distanceToPolylineMeters(point, wayGeometry) {
+  let best = Infinity;
+
+  for (let i = 0; i < wayGeometry.length - 1; i += 1) {
+    const start = {
+      lat: wayGeometry[i].lat,
+      lng: wayGeometry[i].lng ?? wayGeometry[i].lon,
+    };
+    const end = {
+      lat: wayGeometry[i + 1].lat,
+      lng: wayGeometry[i + 1].lng ?? wayGeometry[i + 1].lon,
+    };
+    best = Math.min(best, perpendicularDistanceMeters(point, { start, end }));
+  }
+
+  return best;
+}
+
 async function getSvgPathMetrics(locator) {
   return locator.evaluate((node) => {
     const d = node.getAttribute("d") || "";
@@ -297,6 +315,94 @@ async function getSvgPathMetrics(locator) {
 }
 
 test.describe("detection flow", () => {
+  test("uses representative primitive box height when merged detections span a stacked sign cluster", async ({
+    page,
+  }) => {
+    await mockExternalDependencies(page);
+    await page.goto("/?api_key=test-key");
+
+    const metrics = await page.evaluate(() => {
+      const merged = mergeAngularDetections([
+        {
+          heading: 45,
+          pitch: -2.1,
+          angularWidth: 0.55,
+          angularHeight: 1.05,
+          confidence: 0.91,
+          class_name: "parking_sign",
+        },
+        {
+          heading: 45.08,
+          pitch: -3.95,
+          angularWidth: 0.6,
+          angularHeight: 1.0,
+          confidence: 0.84,
+          class_name: "parking_sign",
+        },
+      ]);
+
+      return {
+        sourceDetections: merged.sourceDetections,
+        mergedHeight: merged.angularHeight,
+        distanceHeight: resolveDetectionDistanceAngularHeight(merged),
+        naiveDistance: estimateDistanceFromAngularSize(merged.angularHeight),
+        adjustedDistance: estimateDistanceFromAngularSize(
+          resolveDetectionDistanceAngularHeight(merged),
+        ),
+        mergeStackFactor: merged.mergeStackFactor,
+      };
+    });
+
+    expect(metrics.sourceDetections).toBe(2);
+    expect(metrics.distanceHeight).toBeLessThan(metrics.mergedHeight);
+    expect(metrics.adjustedDistance).toBeGreaterThan(metrics.naiveDistance);
+    expect(metrics.mergeStackFactor).toBeGreaterThan(0.35);
+  });
+
+  test("snaps direct sign projections to a consistent fixed offset from the road polyline", async ({
+    page,
+  }) => {
+    await mockExternalDependencies(page);
+    await page.goto("/?api_key=test-key");
+
+    const wayGeometry = [
+      { lat: 42.3610, lon: -71.0926 },
+      { lat: 42.3614, lon: -71.0922 },
+      { lat: 42.3618, lon: -71.0918 },
+      { lat: 42.3622, lon: -71.0914 },
+    ];
+    const options = {
+      streetBearing: 45,
+      side: "left",
+      oneway: null,
+      wayGeometry,
+      segmentIndex: 1,
+      segmentStart: { lat: 42.3614, lon: -71.0922 },
+      segmentEnd: { lat: 42.3618, lon: -71.0918 },
+    };
+
+    const projected = await page.evaluate(({ wayGeometry, options }) => {
+      return {
+        first: projectSignToCurbLine(42.3615, -71.0921, 24, 47, {
+          ...options,
+          wayGeometry,
+        }),
+        second: projectSignToCurbLine(42.3615, -71.0921, 40, 58, {
+          ...options,
+          wayGeometry,
+        }),
+      };
+    }, { wayGeometry, options });
+
+    const firstDistance = distanceToPolylineMeters(projected.first, wayGeometry);
+    const secondDistance = distanceToPolylineMeters(projected.second, wayGeometry);
+    expect(Math.abs(firstDistance - secondDistance)).toBeLessThan(0.8);
+    expect(firstDistance).toBeGreaterThan(2.6);
+    expect(firstDistance).toBeLessThan(3.7);
+    expect(projected.first.curbOffsetMeters).toBeCloseTo(3.1, 5);
+    expect(projected.second.curbOffsetMeters).toBeCloseTo(3.1, 5);
+  });
+
   test("builds preview crops with 25% extra vertical margin above and below the sign", async ({
     page,
   }) => {
@@ -587,7 +693,7 @@ test.describe("detection flow", () => {
     await expect(page.locator("#detectionInfo")).toContainText("View: 57°");
   });
 
-  test("projects signs along a curb line parallel to the selected street segment", async ({
+  test("projects signs at a fixed offset from the matched OSM road polyline", async ({
     page,
   }) => {
     await mockExternalDependencies(page, {
@@ -597,17 +703,17 @@ test.describe("detection flow", () => {
           detections: [
             {
               heading: 47,
-              pitch: -0.8,
+              pitch: -4.2,
               angular_width: 0.8,
-              angular_height: 0.8,
+              angular_height: 4.0,
               confidence: 0.87,
               class_name: "parking_sign",
             },
             {
-              heading: 50,
-              pitch: -0.6,
+              heading: 61,
+              pitch: -3.1,
               angular_width: 0.7,
-              angular_height: 0.7,
+              angular_height: 3.0,
               confidence: 0.81,
               class_name: "parking_sign",
             },
@@ -626,15 +732,24 @@ test.describe("detection flow", () => {
     await expect(page.locator("#detectionStatus")).toContainText("Click \"Detect\"");
 
     await page.evaluate(async () => {
+      const wayGeometry = [
+        { lat: 42.3610, lon: -71.0926 },
+        { lat: 42.36134, lon: -71.09228 },
+        { lat: 42.36162, lon: -71.0920 },
+        { lat: 42.36193, lon: -71.0916 },
+        { lat: 42.3622, lon: -71.09118 },
+      ];
       currentPoints = [
         {
           lat: 42.3615,
           lon: -71.0921,
-          bearing: 36.5,
+          bearing: 43,
           oneway: null,
           streetName: "Test Street",
-          segmentStart: { lat: 42.3610, lon: -71.0926 },
-          segmentEnd: { lat: 42.3620, lon: -71.0916 },
+          segmentStart: { lat: 42.36134, lon: -71.09228 },
+          segmentEnd: { lat: 42.36162, lon: -71.0920 },
+          wayGeometry,
+          segmentIndex: 1,
         },
       ];
       currentPanoIds = ["mock-pano"];
@@ -650,13 +765,14 @@ test.describe("detection flow", () => {
     const signs = projection.detections[0].signs;
     expect(signs).toHaveLength(2);
 
-    const segment = {
-      start: { lat: 42.3610, lng: -71.0926 },
-      end: { lat: 42.3620, lng: -71.0916 },
-    };
-    const distances = signs.map((sign) => perpendicularDistanceMeters(sign, segment));
-    expect(Math.abs(distances[0] - distances[1])).toBeLessThan(0.75);
-    expect(distances[0]).toBeGreaterThan(2.4);
-    expect(distances[0]).toBeLessThan(4.25);
+    const wayGeometry = projection.detections[0].wayGeometry;
+    expect(Array.isArray(wayGeometry)).toBe(true);
+    expect(wayGeometry.length).toBeGreaterThan(2);
+    expect(signs[0].curbOffsetMeters).toBeCloseTo(3.1, 5);
+    expect(signs[1].curbOffsetMeters).toBeCloseTo(3.1, 5);
+    expect(signs.every((sign) => Number.isFinite(sign.alongStreetDistance))).toBe(true);
+    expect(signs.every((sign) => sign.side === "left" || sign.side === "right")).toBe(
+      true,
+    );
   });
 });
