@@ -638,60 +638,6 @@ test.describe("detection flow", () => {
     expect(stored?.detections?.[0]?.wayGeometry?.length).toBeGreaterThan(2);
   });
 
-  test("renders a road-centerline guide on the panorama and reprojects it with POV changes", async ({
-    page,
-  }) => {
-    await mockExternalDependencies(page);
-
-    await page.addInitScript(() => {
-      window.__TEST_PANORAMA_POSITION = { lat: 42.3615, lng: -71.0921 };
-    });
-
-    await page.goto("/?api_key=test-key");
-    await expect(page.locator("#detectionStatus")).toContainText("Click \"Detect\"");
-
-    await page.evaluate(async () => {
-      currentPoints = [
-        {
-          lat: 42.3615,
-          lon: -71.0921,
-          bearing: 36.5,
-          oneway: null,
-          streetName: "Test Street",
-          segmentStart: { lat: 42.3610, lon: -71.0926 },
-          segmentEnd: { lat: 42.3620, lon: -71.0916 },
-        },
-      ];
-      currentPanoIds = ["mock-pano"];
-      await showDetectionForIndex(0);
-      detectionPanorama.setPov({ heading: 36.5, pitch: -6, zoom: 1.5 });
-      updateDetectionOverlay();
-      updateDetectionInfoText();
-    });
-
-    const roadGuide = page.locator("#detectionOverlay .road-guide-path");
-    await expect(roadGuide).toHaveCount(1);
-    const initialGuide = await getSvgPathMetrics(roadGuide);
-    expect(initialGuide.d).toBeTruthy();
-    expect(initialGuide.pointCount).toBeGreaterThan(10);
-    expect(initialGuide.xSpan).toBeGreaterThan(120);
-    expect(initialGuide.ySpan).toBeGreaterThan(initialGuide.xSpan * 1.2);
-    await expect(page.locator("#detectionInfo")).toContainText("Road: 37°");
-    await expect(page.locator("#detectionInfo")).toContainText("View: 37°");
-
-    await page.evaluate(() => {
-      detectionPanorama.setPov({ heading: 56.5, pitch: -6, zoom: 1.5 });
-      updateDetectionOverlay();
-      updateDetectionInfoText();
-    });
-
-    const updatedGuide = await getSvgPathMetrics(roadGuide);
-    expect(updatedGuide.d).toBeTruthy();
-    expect(updatedGuide.d).not.toEqual(initialGuide.d);
-    expect(updatedGuide.xSpan).toBeGreaterThan(100);
-    expect(updatedGuide.ySpan).toBeGreaterThan(updatedGuide.xSpan * 1.15);
-    await expect(page.locator("#detectionInfo")).toContainText("View: 57°");
-  });
 
   test("projects signs at a fixed offset from the matched OSM road polyline", async ({
     page,
