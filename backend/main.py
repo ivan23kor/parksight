@@ -66,6 +66,20 @@ class CropSignTilesRequest(BaseModel):
     include_image: bool = False
 
 
+class CropSignStaticRequest(BaseModel):
+    """Request for cropping a sign using Static API at max resolution (640x640)."""
+    pano_id: str
+    heading: float
+    pitch: float
+    angular_width: float
+    angular_height: float
+    confidence: float = 0.0
+    api_key: str
+    padding: float = 1.5  # FOV = sign size * padding
+    save: bool = False
+    include_image: bool = True
+
+
 class SignPreviewRequest(BaseModel):
     pano_id: str
     heading: float
@@ -451,6 +465,63 @@ async def crop_sign_tiles(request: CropSignTilesRequest):
     if request.include_image:
         image_buffer = io.BytesIO()
         cropped.save(image_buffer, format="JPEG", quality=90)
+        response["image_base64"] = base64.b64encode(image_buffer.getvalue()).decode("ascii")
+
+    return response
+
+
+@app.post("/crop-sign-static")
+async def crop_sign_static(request: CropSignStaticRequest):
+    """
+    Crop sign using Street View Static API at max resolution (640x640).
+    Fetches a perspective image centered on the sign - no coordinate conversion,
+    so alignment matches the detection bbox exactly.
+    """
+    # Static API max size: 640x640 (standard), 2048x2048 (premium)
+    size = 640
+    padding = max(request.padding, 1.0)
+    fov = max(abs(request.angular_width), abs(request.angular_height), 0.1) * padding
+    fov = max(10.0, min(120.0, fov))
+
+    image_url = build_streetview_url(
+        request.pano_id,
+        request.heading,
+        request.pitch,
+        fov,
+        size,
+        size,
+        request.api_key,
+    )
+
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(image_url, timeout=10.0)
+            resp.raise_for_status()
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=400, detail=f"Failed to fetch static crop: {e}")
+
+    try:
+        image = Image.open(io.BytesIO(resp.content)).convert("RGB")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to decode static crop: {e}")
+
+    filename = None
+    if request.save:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{timestamp}_static_conf{request.confidence:.2f}.jpg"
+        image.save(DETECTED_SIGNS_DIR / filename, quality=95)
+
+    response = {
+        "filename": filename,
+        "image_url": f"/detected-signs/{filename}" if filename else None,
+        "width": image.width,
+        "height": image.height,
+        "fov": fov,
+    }
+
+    if request.include_image:
+        image_buffer = io.BytesIO()
+        image.save(image_buffer, format="JPEG", quality=90)
         response["image_base64"] = base64.b64encode(image_buffer.getvalue()).decode("ascii")
 
     return response

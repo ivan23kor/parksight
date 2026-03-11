@@ -100,6 +100,30 @@
         width: 100%;
         height: 100%;
         position: relative;
+        transition: opacity 0.2s ease;
+      }
+
+      #panoramaPane.panorama-blackout-active #detectionPanorama {
+        opacity: 0;
+      }
+
+      #togglePanoramaBackgroundBtn {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        z-index: 2002;
+        margin: 0;
+        background: rgba(17, 24, 39, 0.92);
+        color: #f9fafb;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 13px;
+        line-height: 1.2;
+      }
+
+      #togglePanoramaBackgroundBtn:hover {
+        background: rgba(31, 41, 55, 0.96);
       }
 
       #detectionOverlay {
@@ -214,6 +238,90 @@
         line-height: 1.4;
       }
 
+      #cropAbModal {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 3000;
+        background: rgba(0, 0, 0, 0.7);
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+
+      #cropAbModal.visible {
+        display: flex;
+      }
+
+      #cropAbModal .crop-ab-content {
+        background: #fff;
+        border-radius: 12px;
+        padding: 24px;
+        max-width: 90vw;
+        max-height: 90vh;
+        overflow: auto;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+      }
+
+      #cropAbModal .crop-ab-title {
+        font-size: 18px;
+        font-weight: 600;
+        margin-bottom: 16px;
+        color: #111;
+      }
+
+      #cropAbModal .crop-ab-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+        margin-bottom: 16px;
+      }
+
+      #cropAbModal .crop-ab-cell {
+        text-align: center;
+      }
+
+      #cropAbModal .crop-ab-cell h4 {
+        font-size: 14px;
+        font-weight: 600;
+        margin: 0 0 8px 0;
+        color: #333;
+      }
+
+      #cropAbModal .crop-ab-cell img {
+        max-width: 100%;
+        height: auto;
+        border-radius: 8px;
+        border: 1px solid #e5e7eb;
+      }
+
+      #cropAbModal .crop-ab-cell .crop-ab-meta {
+        font-size: 12px;
+        color: #6b7280;
+        margin-top: 6px;
+      }
+
+      #cropAbModal .crop-ab-cell .crop-ab-error {
+        color: #dc2626;
+        font-size: 13px;
+      }
+
+      #cropAbModal .crop-ab-close {
+        display: block;
+        margin: 0 auto;
+        padding: 10px 24px;
+        background: #3b82f6;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 14px;
+      }
+
+      #cropAbModal .crop-ab-close:hover {
+        background: #2563eb;
+      }
+
       @media (max-width: 900px) {
         #splitLayout {
           flex-direction: column;
@@ -239,6 +347,9 @@
   <body>
     <div id="splitLayout">
       <section id="panoramaPane" aria-label="Street View panorama">
+        <button id="togglePanoramaBackgroundBtn" type="button">
+          Black background
+        </button>
         <div id="detectionControls">
           <button id="redetectBtn">Detect</button>
         </div>
@@ -254,6 +365,25 @@
           Clear projected signs
         </button>
       </section>
+    </div>
+
+    <div id="cropAbModal" aria-label="Crop A/B comparison">
+      <div class="crop-ab-content">
+        <div class="crop-ab-title">Crop comparison: Tiles vs Static API</div>
+        <div class="crop-ab-grid">
+          <div class="crop-ab-cell" id="cropAbTiles">
+            <h4>Tiles (current)</h4>
+            <div id="cropAbTilesImg"></div>
+            <div class="crop-ab-meta" id="cropAbTilesMeta"></div>
+          </div>
+          <div class="crop-ab-cell" id="cropAbStatic">
+            <h4>Static API (new)</h4>
+            <div id="cropAbStaticImg"></div>
+            <div class="crop-ab-meta" id="cropAbStaticMeta"></div>
+          </div>
+        </div>
+        <button type="button" class="crop-ab-close" id="cropAbClose">Close</button>
+      </div>
     </div>
 
     <!-- External Libraries -->
@@ -290,6 +420,7 @@
       // Global state
       let map;
       let signMarkersLayer;
+      let isPanoramaBlackoutEnabled = false;
 
       // Store point data for detection context
       let currentPoints = [];
@@ -1216,6 +1347,37 @@
        * Set up UI event handlers.
        */
       function setupEventHandlers() {
+        const panoramaPane = document.getElementById("panoramaPane");
+        const togglePanoramaBackgroundBtn = document.getElementById(
+          "togglePanoramaBackgroundBtn",
+        );
+
+        const syncPanoramaBackgroundToggleUi = () => {
+          if (!panoramaPane || !togglePanoramaBackgroundBtn) return;
+          panoramaPane.classList.toggle(
+            "panorama-blackout-active",
+            isPanoramaBlackoutEnabled,
+          );
+          togglePanoramaBackgroundBtn.textContent = isPanoramaBlackoutEnabled
+            ? "Show panorama"
+            : "Black background";
+          togglePanoramaBackgroundBtn.setAttribute(
+            "aria-pressed",
+            String(isPanoramaBlackoutEnabled),
+          );
+        };
+
+        const togglePanoramaBackground = () => {
+          isPanoramaBlackoutEnabled = !isPanoramaBlackoutEnabled;
+          syncPanoramaBackgroundToggleUi();
+        };
+
+        togglePanoramaBackgroundBtn?.addEventListener(
+          "click",
+          togglePanoramaBackground,
+        );
+        syncPanoramaBackgroundToggleUi();
+
         // Detection pane controls
         document
           .getElementById("detectionStatus")

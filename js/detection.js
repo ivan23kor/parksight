@@ -28,9 +28,10 @@ const TILE_GRID_WIDTH = 32 * TILE_SIZE; // 16384
 const TILE_GRID_HEIGHT = 16 * TILE_SIZE; // 8192
 const CROP_PADDING_X = 1.2; // 20% wider total around the detected sign
 const CROP_PADDING_Y = 1.5; // Preserve 25% extra sign height above and below the detection
-// Shift crop center down by this fraction of angular height; detection bbox center tends
-// to sit above the sign's visual center (e.g. red band at bottom).
-const CROP_PITCH_BIAS_DOWN = 0.12;
+// Shift crop center down by this fraction of angular height. The detection bbox
+// geometric center sits above the sign's visual center (e.g. red band at bottom),
+// and Static API vs Tiles coordinate frames can add a small vertical offset.
+const CROP_PITCH_BIAS_DOWN = 0.25;
 const DETECTION_CLUSTER_WIDTH_RATIO = 1.25;
 const DETECTION_CLUSTER_HEIGHT_RATIO = 2.4;
 const DETECTION_CLUSTER_WIDTH_FLOOR = 0.35;
@@ -1436,7 +1437,7 @@ async function cropAndSaveSign(det, cropCenterOverride = null) {
     return;
   }
 
-  if (statusEl) statusEl.textContent = "Saving sign...";
+  if (statusEl) statusEl.textContent = "Fetching crops (tiles + static)...";
 
   try {
     const cropPlan = await buildDetectionCropPlan(
@@ -1486,25 +1487,67 @@ async function cropAndSaveSign(det, cropCenterOverride = null) {
         `===================`,
     );
 
-    const resp = await fetch(`${apiUrl}/crop-sign-tiles`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...requestBody,
-        debug: true,
-        save: true,
+    // A/B test: fetch both tiles and static crops in parallel
+    const [tilesResp, staticResult] = await Promise.allSettled([
+      fetch(`${apiUrl}/crop-sign-tiles`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...requestBody,
+          debug: true,
+          save: true,
+          include_image: true,
+        }),
       }),
-    });
+      fetchCropStatic(det, panoId, { save: true }),
+    ]);
 
-    if (!resp.ok) {
-      const errText = await resp.text();
-      throw new Error(`Save failed: ${resp.status} - ${errText}`);
+    let tilesResult = null;
+    let tilesErr = null;
+    if (tilesResp.status === "fulfilled" && tilesResp.value.ok) {
+      const tilesJson = await tilesResp.value.json();
+      if (tilesJson.image_base64) {
+        tilesResult = {
+          src: `data:image/jpeg;base64,${tilesJson.image_base64}`,
+          width: tilesJson.width,
+          height: tilesJson.height,
+        };
+      } else if (tilesJson.filename) {
+        tilesResult = {
+          src: `${apiUrl}/detected-signs/${encodeURIComponent(tilesJson.filename)}`,
+          width: tilesJson.width,
+          height: tilesJson.height,
+        };
+      }
+    }
+    if (!tilesResult) {
+      tilesErr =
+        tilesResp.status === "rejected"
+          ? tilesResp.reason
+          : tilesResp.status === "fulfilled" && !tilesResp.value.ok
+            ? new Error(`Tiles: ${tilesResp.value.status}`)
+            : new Error("Tiles: no image data");
     }
 
-    const result = await resp.json();
+    const staticErr =
+      staticResult.status === "rejected" ? staticResult.reason : null;
+    const staticData =
+      staticResult.status === "fulfilled" ? staticResult.value : null;
+
+    showCropAbModal(
+      tilesErr || tilesResult,
+      staticErr || staticData,
+      statusEl,
+    );
 
     if (statusEl) {
-      statusEl.textContent = `Saved: ${result.filename} (${result.width}x${result.height}px)`;
+      const tilesStr = tilesResult
+        ? `${tilesResult.width}×${tilesResult.height}`
+        : "failed";
+      const staticStr = staticData
+        ? `${staticData.width}×${staticData.height}`
+        : "failed";
+      statusEl.textContent = `A/B: Tiles ${tilesStr} | Static ${staticStr}`;
     }
   } catch (err) {
     console.error("Save error:", err);
@@ -1650,6 +1693,90 @@ async function fetchDetectionCropPreview(det, panoId) {
   }
 
   throw new Error("Preview response missing image data");
+}
+
+/**
+ * Fetch sign crop using Static API at max resolution (640x640).
+ * No coordinate conversion - image is centered on sign, alignment matches bbox.
+ * @param {Object} options - { save: boolean } to also save to detected_signs/
+ */
+async function fetchCropStatic(det, panoId, options = {}) {
+  const apiUrl = window.DETECTION_CONFIG?.API_URL;
+  const apiKey = window.GOOGLE_CONFIG?.API_KEY;
+  if (!apiUrl || !apiKey) {
+    throw new Error("Detection API or Google API key not configured");
+  }
+  const resp = await fetch(`${apiUrl}/crop-sign-static`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      pano_id: panoId,
+      heading: det.heading,
+      pitch: det.pitch,
+      angular_width: det.angularWidth ?? 0.5,
+      angular_height: det.angularHeight ?? 1,
+      confidence: det.confidence ?? 0,
+      api_key: apiKey,
+      padding: 1.5,
+      save: options.save ?? true,
+      include_image: true,
+    }),
+  });
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Static crop failed: ${errText}`);
+  }
+  const result = await resp.json();
+  if (result.image_base64) {
+    return {
+      src: `data:image/jpeg;base64,${result.image_base64}`,
+      width: result.width,
+      height: result.height,
+    };
+  }
+  throw new Error("Static crop response missing image data");
+}
+
+/**
+ * Show A/B comparison modal with tiles vs static crop.
+ */
+function showCropAbModal(tilesResult, staticResult, statusEl) {
+  const modal = document.getElementById("cropAbModal");
+  const tilesImg = document.getElementById("cropAbTilesImg");
+  const tilesMeta = document.getElementById("cropAbTilesMeta");
+  const staticImg = document.getElementById("cropAbStaticImg");
+  const staticMeta = document.getElementById("cropAbStaticMeta");
+  const closeBtn = document.getElementById("cropAbClose");
+  if (!modal || !tilesImg || !staticImg) return;
+
+  const renderCell = (container, metaEl, result, isError) => {
+    container.innerHTML = "";
+    if (isError) {
+      container.innerHTML = `<div class="crop-ab-error">${result}</div>`;
+      if (metaEl) metaEl.textContent = "";
+    } else {
+      const img = document.createElement("img");
+      img.src = result.src;
+      img.alt = "Crop";
+      container.appendChild(img);
+      if (metaEl) metaEl.textContent = `${result.width}×${result.height}px`;
+    }
+  };
+
+  renderCell(tilesImg, tilesMeta, tilesResult, tilesResult instanceof Error);
+  renderCell(staticImg, staticMeta, staticResult, staticResult instanceof Error);
+
+  modal.classList.add("visible");
+
+  const close = () => {
+    modal.classList.remove("visible");
+    if (statusEl) statusEl.textContent = "Tap to detect";
+  };
+
+  closeBtn.onclick = close;
+  modal.onclick = (e) => {
+    if (e.target === modal) close();
+  };
 }
 
 // Google Street View camera height in meters (roof-mounted camera)
