@@ -10,6 +10,8 @@ let detectionPov = { heading: 0, pitch: 0, zoom: 1 }; // POV when detection was 
 let povChangeListener = null;
 let panoChangeListener = null;
 let positionChangeListener = null;
+const panoramaLinkSpotPositionCache = new Map();
+const panoramaLinkSpotRequestsInFlight = new Set();
 
 /**
  * Calculate FOV from Street View zoom level.
@@ -36,6 +38,9 @@ const DETECTION_CLUSTER_WIDTH_RATIO = 1.25;
 const DETECTION_CLUSTER_HEIGHT_RATIO = 2.4;
 const DETECTION_CLUSTER_WIDTH_FLOOR = 0.35;
 const DETECTION_CLUSTER_HEIGHT_FLOOR = 1.0;
+const PANORAMA_LINK_SPOT_HEIGHT_METERS = 0;
+const PANORAMA_LINK_SPOT_RADIUS_PX = 12;
+const PANORAMA_LINK_SPOT_MAX_VISIBLE = 8;
 
 /**
  * Convert heading/pitch to pixel coordinates in the full panorama tile image.
@@ -1039,6 +1044,8 @@ function updateDetectionOverlay() {
   // Clear existing boxes (but keep markers)
   overlay.querySelectorAll(":not(.sign-marker)").forEach((el) => el.remove());
 
+  renderPanoramaLinkSpotsOverlay(overlay, pov, fov, width, height);
+
   // Draw each detection if visible
   for (const det of currentDetections) {
     const screen = angularToScreen(
@@ -1133,6 +1140,153 @@ function updateDetectionOverlay() {
   }
 }
 
+function renderPanoramaLinkSpotsOverlay(overlay, pov, fov, width, height) {
+  if (!overlay || !detectionPanorama) return;
+
+  const currentPanoId = detectionPanorama.getPano?.();
+  const cameraPosition = detectionPanorama.getPosition?.();
+  const cameraLat = cameraPosition?.lat?.();
+  const cameraLng = cameraPosition?.lng?.();
+  if (!currentPanoId || !Number.isFinite(cameraLat) || !Number.isFinite(cameraLng)) {
+    return;
+  }
+
+  const links = detectionPanorama.getLinks?.() || [];
+  let rendered = 0;
+
+  for (const link of links) {
+    if (!link?.pano) {
+      continue;
+    }
+    if (rendered >= PANORAMA_LINK_SPOT_MAX_VISIBLE) {
+      break;
+    }
+
+    const linkSpot = getCachedPanoramaLinkSpotPosition(currentPanoId, link.pano);
+    if (!linkSpot) {
+      requestPanoramaLinkSpotPosition(currentPanoId, link);
+      continue;
+    }
+
+    const screen = projectWorldPointToScreen(
+      linkSpot.lat,
+      linkSpot.lng,
+      PANORAMA_LINK_SPOT_HEIGHT_METERS,
+      cameraLat,
+      cameraLng,
+      pov.heading,
+      pov.pitch,
+      fov,
+      width,
+      height,
+    );
+    if (!screen) {
+      continue;
+    }
+
+    const withinViewport =
+      screen.x >= -PANORAMA_LINK_SPOT_RADIUS_PX &&
+      screen.x <= width + PANORAMA_LINK_SPOT_RADIUS_PX &&
+      screen.y >= -PANORAMA_LINK_SPOT_RADIUS_PX &&
+      screen.y <= height + PANORAMA_LINK_SPOT_RADIUS_PX;
+    if (!withinViewport) {
+      continue;
+    }
+
+    const spot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    spot.setAttribute("cx", screen.x.toFixed(2));
+    spot.setAttribute("cy", screen.y.toFixed(2));
+    spot.setAttribute("r", PANORAMA_LINK_SPOT_RADIUS_PX.toFixed(2));
+    spot.setAttribute("fill", "rgba(156, 163, 175, 0.7)");
+    spot.setAttribute("stroke", "rgba(55, 65, 81, 0.95)");
+    spot.setAttribute("stroke-width", "2");
+    spot.style.pointerEvents = "auto";
+    spot.style.cursor = "pointer";
+    spot.setAttribute("role", "button");
+    spot.setAttribute(
+      "aria-label",
+      `Jump to linked panorama ${link.description || link.pano}`,
+    );
+    spot.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const currentPov = detectionPanorama.getPov?.() || {};
+      const nextHeading = Number.isFinite(link.heading)
+        ? normalizeBearingDegrees(link.heading)
+        : Number.isFinite(currentPov.heading)
+          ? normalizeBearingDegrees(currentPov.heading)
+          : 0;
+      detectionPanorama.setPano(link.pano);
+      detectionPanorama.setPov({
+        heading: nextHeading,
+        pitch: Number.isFinite(currentPov.pitch) ? currentPov.pitch : 0,
+        zoom: Number.isFinite(currentPov.zoom) ? currentPov.zoom : PANORAMA_DEFAULTS.zoom,
+      });
+
+      if (typeof currentDetectionContext === "object" && currentDetectionContext) {
+        currentDetectionContext = {
+          ...currentDetectionContext,
+          panoId: link.pano,
+          heading: nextHeading,
+          pointIndex: null,
+          streetName:
+            link.description || currentDetectionContext.streetName || "Unknown street",
+        };
+      }
+      if (typeof updateDetectionInfoText === "function") {
+        updateDetectionInfoText();
+      }
+    });
+    overlay.appendChild(spot);
+    rendered += 1;
+  }
+}
+
+function getPanoramaLinkSpotCacheKey(currentPanoId, linkPanoId) {
+  return `${currentPanoId}::${linkPanoId}`;
+}
+
+function getCachedPanoramaLinkSpotPosition(currentPanoId, linkPanoId) {
+  const key = getPanoramaLinkSpotCacheKey(currentPanoId, linkPanoId);
+  return panoramaLinkSpotPositionCache.get(key) || null;
+}
+
+function cachePanoramaLinkSpotPosition(currentPanoId, linkPanoId, position) {
+  const key = getPanoramaLinkSpotCacheKey(currentPanoId, linkPanoId);
+  panoramaLinkSpotPositionCache.set(key, position);
+}
+
+function requestPanoramaLinkSpotPosition(currentPanoId, link) {
+  const key = getPanoramaLinkSpotCacheKey(currentPanoId, link.pano);
+  if (panoramaLinkSpotRequestsInFlight.has(key)) {
+    return;
+  }
+  panoramaLinkSpotRequestsInFlight.add(key);
+
+  const svService = new google.maps.StreetViewService();
+  svService
+    .getPanorama({ pano: link.pano })
+    .then((response) => {
+      const latLng = response?.data?.location?.latLng;
+      const lat = latLng?.lat?.();
+      const lng = latLng?.lng?.();
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        return;
+      }
+      cachePanoramaLinkSpotPosition(currentPanoId, link.pano, { lat, lng });
+    })
+    .catch((err) => {
+      console.warn("Failed to resolve linked panorama position:", err);
+    })
+    .finally(() => {
+      panoramaLinkSpotRequestsInFlight.delete(key);
+      if (detectionPanorama?.getPano?.() === currentPanoId) {
+        updateDetectionOverlay();
+      }
+    });
+}
+
 /**
  * Initialize or update the detection panorama.
  */
@@ -1151,7 +1305,7 @@ function initDetectionPanorama(panoId, heading, container) {
       showRoadLabels: false,
       motionTracking: false,
       motionTrackingControl: false,
-      linksControl: false,
+      linksControl: true,
       panControl: true,
       zoomControl: true,
       fullscreenControl: false,
@@ -1168,11 +1322,25 @@ function initDetectionPanorama(panoId, heading, container) {
     );
     panoChangeListener = detectionPanorama.addListener(
       "pano_changed",
-      clearDetections,
+      () => {
+        clearDetections();
+        if (typeof syncPanoramaCaptureSpotsOnMap === "function") {
+          Promise.resolve(syncPanoramaCaptureSpotsOnMap()).catch((err) => {
+            console.warn("Failed to sync panorama spots after pano change:", err);
+          });
+        }
+      },
     );
     positionChangeListener = detectionPanorama.addListener(
       "position_changed",
-      updateDetectionOverlay,
+      () => {
+        updateDetectionOverlay();
+        if (typeof syncPanoramaCaptureSpotsOnMap === "function") {
+          Promise.resolve(syncPanoramaCaptureSpotsOnMap()).catch((err) => {
+            console.warn("Failed to sync panorama spots after position change:", err);
+          });
+        }
+      },
     );
 
     // Track mouse position at document level (works over bounding boxes too)

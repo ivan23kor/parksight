@@ -420,7 +420,9 @@
       // Global state
       let map;
       let signMarkersLayer;
+      let panoramaCaptureSpotsLayer;
       let isPanoramaBlackoutEnabled = false;
+      let panoramaCaptureSpotsSyncToken = 0;
 
       // Store point data for detection context
       let currentPoints = [];
@@ -437,6 +439,7 @@
       const PREVIEW_REFINEMENT_FOV_MIN = 18;
       const PREVIEW_REFINEMENT_FOV_MAX = 40;
       const DETECTION_ROAD_MARKER_HALF_LENGTH_METERS = 36;
+      const PANORAMA_CAPTURE_SPOT_MAX_LINKS = 8;
 
       function normalizeSignMapStore(parsed) {
         if (!parsed) {
@@ -536,6 +539,146 @@
         localStorage.removeItem(SIGN_MAP_STORAGE_KEY);
         signMarkersLayer.clearLayers();
       }
+
+      function clearPanoramaCaptureSpots() {
+        panoramaCaptureSpotsLayer?.clearLayers();
+      }
+
+      function renderPanoramaCaptureSpotsOnMap(currentSpot, linkedSpots) {
+        if (!panoramaCaptureSpotsLayer) return;
+        panoramaCaptureSpotsLayer.clearLayers();
+
+        if (
+          !currentSpot ||
+          !Number.isFinite(currentSpot.lat) ||
+          !Number.isFinite(currentSpot.lng)
+        ) {
+          return;
+        }
+
+        const currentMarker = L.circleMarker([currentSpot.lat, currentSpot.lng], {
+          radius: 6,
+          color: "#1d4ed8",
+          fillColor: "#60a5fa",
+          weight: 2,
+          opacity: 0.95,
+          fillOpacity: 0.85,
+        }).addTo(panoramaCaptureSpotsLayer);
+        currentMarker.bindPopup(
+          `<b>Current panorama</b><br>Pano: ${currentSpot.panoId || "unknown"}`,
+        );
+
+        for (const spot of linkedSpots || []) {
+          if (!Number.isFinite(spot.lat) || !Number.isFinite(spot.lng) || !spot.panoId) {
+            continue;
+          }
+
+          const spotMarker = L.circleMarker([spot.lat, spot.lng], {
+            radius: 5,
+            color: "#4b5563",
+            fillColor: "#9ca3af",
+            weight: 2,
+            opacity: 0.95,
+            fillOpacity: 0.9,
+          }).addTo(panoramaCaptureSpotsLayer);
+
+          const spotHeading = Number.isFinite(spot.heading)
+            ? Math.round(normalizeBearingDegrees(spot.heading))
+            : null;
+          spotMarker.bindPopup(
+            `<b>Linked panorama</b><br>` +
+              `Pano: ${spot.panoId}<br>` +
+              `${spot.description || "No description"}<br>` +
+              `${spotHeading != null ? `Heading: ${spotHeading}°` : ""}`,
+          );
+
+          spotMarker.on("click", () => {
+            currentDetectionContext = {
+              ...currentDetectionContext,
+              panoId: spot.panoId,
+              heading: Number.isFinite(spot.heading)
+                ? normalizeBearingDegrees(spot.heading)
+                : currentDetectionContext?.heading ?? BASE_HEADING,
+              pointIndex: null,
+              streetName:
+                spot.description ||
+                currentDetectionContext?.streetName ||
+                "Unknown street",
+            };
+            initPanoramaForContext();
+          });
+        }
+      }
+
+      async function fetchLinkedPanoramaCaptureSpots(links) {
+        const svService = new google.maps.StreetViewService();
+        const uniqueLinks = [];
+        const seen = new Set();
+
+        for (const link of links || []) {
+          if (!link?.pano || seen.has(link.pano)) continue;
+          seen.add(link.pano);
+          uniqueLinks.push(link);
+        }
+
+        const limitedLinks = uniqueLinks.slice(0, PANORAMA_CAPTURE_SPOT_MAX_LINKS);
+        const settled = await Promise.allSettled(
+          limitedLinks.map(async (link) => {
+            const response = await svService.getPanorama({ pano: link.pano });
+            const latLng = response?.data?.location?.latLng;
+            if (!latLng) {
+              return null;
+            }
+
+            return {
+              panoId: link.pano,
+              lat: latLng.lat(),
+              lng: latLng.lng(),
+              heading: link.heading,
+              description: link.description || "",
+            };
+          }),
+        );
+
+        return settled
+          .filter((result) => result.status === "fulfilled" && result.value)
+          .map((result) => result.value);
+      }
+
+      window.syncPanoramaCaptureSpotsOnMap = async function () {
+        const syncToken = ++panoramaCaptureSpotsSyncToken;
+        if (!panoramaCaptureSpotsLayer || !detectionPanorama) {
+          clearPanoramaCaptureSpots();
+          return;
+        }
+
+        try {
+          const panoId = detectionPanorama.getPano?.();
+          const position = detectionPanorama.getPosition?.();
+          const currentLat = position?.lat?.();
+          const currentLng = position?.lng?.();
+          if (!panoId || !Number.isFinite(currentLat) || !Number.isFinite(currentLng)) {
+            clearPanoramaCaptureSpots();
+            return;
+          }
+
+          const links = detectionPanorama.getLinks?.() || [];
+          const linkedSpots = await fetchLinkedPanoramaCaptureSpots(links);
+          if (syncToken !== panoramaCaptureSpotsSyncToken) {
+            return;
+          }
+
+          renderPanoramaCaptureSpotsOnMap(
+            { panoId, lat: currentLat, lng: currentLng },
+            linkedSpots,
+          );
+        } catch (err) {
+          console.warn("Failed to sync panorama capture spots on map:", err);
+          if (syncToken === panoramaCaptureSpotsSyncToken) {
+            clearPanoramaCaptureSpots();
+          }
+        }
+      };
 
       function hasDetectionRoadContext(context) {
         if (!context) return false;
@@ -1317,6 +1460,7 @@
 
         // Initialize layers
         signMarkersLayer = L.layerGroup().addTo(map);
+        panoramaCaptureSpotsLayer = L.layerGroup().addTo(map);
 
         // Set up event handlers
         setupEventHandlers();
@@ -1730,6 +1874,9 @@
           document.getElementById("detectionPanorama"),
         );
         updateDetectionInfoText();
+        if (typeof syncPanoramaCaptureSpotsOnMap === "function") {
+          syncPanoramaCaptureSpotsOnMap();
+        }
         statusEl.textContent = `Tap to detect (heading: ${Math.round(currentDetectionContext.heading)}°)`;
       }
 
