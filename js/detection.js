@@ -55,6 +55,23 @@ function estimateSignDistance(signPitch) {
   return deltaH / Math.tan((-signPitch * Math.PI) / 180);
 }
 
+/**
+ * Scale factor from calibration log ground truth.
+ * When estimated is ~50% high, ratio = estimated/groundTruth ≈ 1.5, so scale = 1/1.5 ≈ 0.67.
+ * Returns 1.0 if no ground-truth entries.
+ */
+function getDepthScaleFactor() {
+  const log = (typeof window !== "undefined" && window._calibrationLog) || [];
+  const withGt = log.filter((e) => e.groundTruthDistance != null && e.estimatedDistance != null && e.estimatedDistance > 0);
+  if (withGt.length === 0) return 1;
+  const ratios = withGt.map((e) => e.estimatedDistance / e.groundTruthDistance);
+  const sorted = [...ratios].sort((a, b) => a - b);
+  const medianRatio = sorted.length % 2 === 0
+    ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+    : sorted[Math.floor(sorted.length / 2)];
+  return 1 / medianRatio;
+}
+
 function toggleCalibrationMode() {
   calibrationMode = !calibrationMode;
   const btn = document.getElementById("calibrateBtn");
@@ -1151,7 +1168,6 @@ async function fetchDepthForDetection(det, roadBearing, forCalibration = false) 
         pano_id: panoId,
         sign_heading: det.heading,
         sign_pitch: det.pitch,
-        sign_angular_height: det.angularHeight ?? null,
         road_bearing: roadBearing,
         api_key: window.GOOGLE_CONFIG?.API_KEY || null,
       }),
@@ -1232,48 +1248,20 @@ function renderDepthOverlay(overlay, pov, fov, screenWidth, screenHeight) {
     }
   }
 
-  if (!currentDepthData) return;
+  if (!currentDepthData || currentDepthData.sign_horiz_dist_m == null) return;
 
-  const { sign_heading, road_bearing, alpha_deg, ground_samples } = currentDepthData;
+  const { sign_heading, road_bearing, alpha_deg } = currentDepthData;
 
   const bestDet = currentDetections.length > 0
     ? currentDetections.reduce((a, b) => a.confidence > b.confidence ? a : b)
     : null;
-  const signPitch = bestDet?.pitch;
 
-  let signDist = null;
-  let groundProjectionPitch = -30; // default fallback
-  let distSource = "none";
-
-  // Primary: depth-map based distance (from backend sign-level sampling)
-  if (currentDepthData.sign_horiz_dist_m != null && currentDepthData.sign_horiz_dist_m > 0) {
-    signDist = currentDepthData.sign_horiz_dist_m;
-    distSource = "depth";
-  }
-
-  // Fallback: pitch-based calibration model
-  if (signDist == null) {
-    const deltaH = fitDeltaH();
-    if (deltaH != null && signPitch != null && Math.abs(signPitch) > 0.1) {
-      const rawDist = deltaH / Math.tan((-signPitch * Math.PI) / 180);
-      if (rawDist > 0) {
-        signDist = rawDist;
-        distSource = "pitch-model";
-      }
-    }
-  }
-
-  let displayCurb = null;
-  let displayAlong = null;
-
-  if (signDist != null) {
-    groundProjectionPitch = -(Math.atan(CAMERA_HEIGHT_M / signDist) * 180) / Math.PI;
-    displayCurb = Math.abs(signDist * Math.sin((alpha_deg * Math.PI) / 180));
-    displayAlong = signDist * Math.cos((alpha_deg * Math.PI) / 180);
-  } else {
-    displayCurb = currentDepthData.curb_distance_m;
-    displayAlong = currentDepthData.along_road_m;
-  }
+  const depthScale = getDepthScaleFactor();
+  const signDist = currentDepthData.sign_horiz_dist_m * depthScale;
+  const distSource = depthScale !== 1 ? "depth (scaled)" : "depth";
+  const groundProjectionPitch = -(Math.atan(CAMERA_HEIGHT_M / signDist) * 180) / Math.PI;
+  const displayCurb = currentDepthData.curb_distance_m * depthScale;
+  const displayAlong = currentDepthData.along_road_m * depthScale;
 
   // Draw road bearing reference line (yellow dashed)
   const roadHorizonPt = toScreen(road_bearing, 0);
@@ -1294,26 +1282,10 @@ function renderDepthOverlay(overlay, pov, fov, screenWidth, screenHeight) {
   }
 
   // Draw ground projection point
-  if (signGroundPt && signDist != null) {
-    const color = distSource === "depth" ? "#22d3ee" : "#f472b6";
-    overlay.appendChild(mkCircle(signGroundPt.x, signGroundPt.y, 6, color));
+  if (signGroundPt) {
+    overlay.appendChild(mkCircle(signGroundPt.x, signGroundPt.y, 6, "#22d3ee"));
     const label = `${signDist.toFixed(1)}m (${distSource})`;
-    overlay.appendChild(mkText(signGroundPt.x + 10, signGroundPt.y - 2, label, color, "11", "start"));
-  }
-
-  // Draw depth map ground samples as small dots (for reference)
-  for (const sample of ground_samples) {
-    const pt = toScreen(sign_heading, sample.pitch);
-    if (!pt) continue;
-    overlay.appendChild(mkCircle(pt.x, pt.y, 2, "rgba(34, 211, 238, 0.5)"));
-  }
-
-  // Draw sign-level depth samples
-  for (const sample of (currentDepthData.sign_samples || [])) {
-    const pt = toScreen(sign_heading, sample.pitch);
-    if (!pt) continue;
-    overlay.appendChild(mkCircle(pt.x, pt.y, 3, "#a78bfa"));
-    overlay.appendChild(mkText(pt.x + 10, pt.y + 4, `${sample.raw_depth.toFixed(1)}m`, "#a78bfa", "10", "start"));
+    overlay.appendChild(mkText(signGroundPt.x + 10, signGroundPt.y - 2, label, "#22d3ee", "11", "start"));
   }
 
   // Draw full 360° dashed orange horizon line.
@@ -1321,12 +1293,10 @@ function renderDepthOverlay(overlay, pov, fov, screenWidth, screenHeight) {
   // so the sign doesn't incorrectly appear higher above the horizon when farther away.
   {
     let horizonPitchOffset = 0;
-    if (signDist != null && signDist > 0 && signDist < 60) {
-      const deltaH = fitDeltaH();
-      if (deltaH != null && deltaH < 0) {
-        const signCenterAboveCamera = -deltaH;
-        horizonPitchOffset = (Math.atan(signCenterAboveCamera / signDist) * 180) / Math.PI;
-      }
+    const deltaH = fitDeltaH();
+    if (deltaH != null && deltaH < 0) {
+      const signCenterAboveCamera = -deltaH;
+      horizonPitchOffset = (Math.atan(signCenterAboveCamera / signDist) * 180) / Math.PI;
     }
     let prevPt = null;
     for (let i = 0; i <= 360; i++) {
@@ -1357,12 +1327,12 @@ function renderDepthOverlay(overlay, pov, fov, screenWidth, screenHeight) {
   }
 
   // Info box
-  if (displayCurb != null || displayAlong != null || signDist != null) {
+  {
     const boxW = 260;
-    const boxH = 116;
+    const boxH = 100;
     const boxX = screenWidth - boxW - 10;
     const boxY = screenHeight - boxH - 10;
-    const borderColor = distSource === "depth" ? "#22d3ee" : "#f472b6";
+    const borderColor = "#22d3ee";
     const bg = document.createElementNS(SVG_NS, "rect");
     bg.setAttribute("x", boxX);
     bg.setAttribute("y", boxY);
@@ -1376,19 +1346,14 @@ function renderDepthOverlay(overlay, pov, fov, screenWidth, screenHeight) {
     overlay.appendChild(bg);
 
     let lineY = boxY + 18;
-    const sourceLabel = distSource === "depth" ? "DEPTH MAP" : distSource === "pitch-model" ? "PITCH MODEL" : "GROUND DEPTH";
-    overlay.appendChild(mkText(boxX + 10, lineY, sourceLabel, borderColor, "11", "start"));
+    overlay.appendChild(mkText(boxX + 10, lineY, "DEPTH MAP", borderColor, "11", "start"));
     lineY += 18;
-    if (signDist != null) {
-      const signLabel = currentDepthData._forCalibration ? "calibrated" : "best";
-      overlay.appendChild(mkText(boxX + 10, lineY, `Sign dist: ${signDist.toFixed(1)}m (${signLabel})`, "#94a3b8", "12", "start"));
-      lineY += 18;
-    }
-    if (displayCurb != null)
-      overlay.appendChild(mkText(boxX + 10, lineY, `Curb dist: ${displayCurb.toFixed(1)}m ⊥ to road`, "#f472b6", "11", "start"));
+    const signLabel = currentDepthData._forCalibration ? "calibrated" : "best";
+    overlay.appendChild(mkText(boxX + 10, lineY, `Sign dist: ${signDist.toFixed(1)}m (${signLabel})`, "#94a3b8", "12", "start"));
     lineY += 18;
-    if (displayAlong != null)
-      overlay.appendChild(mkText(boxX + 10, lineY, `Along road: ${displayAlong.toFixed(1)}m`, "#4ade80", "11", "start"));
+    overlay.appendChild(mkText(boxX + 10, lineY, `Curb dist: ${displayCurb.toFixed(1)}m \u22A5 to road`, "#f472b6", "11", "start"));
+    lineY += 18;
+    overlay.appendChild(mkText(boxX + 10, lineY, `Along road: ${displayAlong.toFixed(1)}m`, "#4ade80", "11", "start"));
   }
 }
 
