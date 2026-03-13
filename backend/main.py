@@ -924,20 +924,16 @@ async def detect_sahi(request: SahiRequest):
 CAMERA_HEIGHT_M = 2.5  # Google SV car camera height above ground
 
 
+MIN_SIGN_DIST_M = 1.0
+MAX_SIGN_DIST_M = 200.0
+
+
 class DepthRequest(BaseModel):
     pano_id: str
     sign_heading: float
-    sign_pitch: Optional[float] = None
-    sign_angular_height: Optional[float] = None
+    sign_pitch: float
     road_bearing: float
     api_key: Optional[str] = None
-
-
-class DepthSample(BaseModel):
-    pitch: float
-    raw_depth: float
-    horiz_dist: float
-    plane_idx: int
 
 
 class DepthResponse(BaseModel):
@@ -948,11 +944,11 @@ class DepthResponse(BaseModel):
     sign_heading: float
     road_bearing: float
     alpha_deg: float
-    ground_samples: list[DepthSample]
-    sign_samples: list[DepthSample]
-    sign_horiz_dist_m: Optional[float] = None
-    curb_distance_m: Optional[float] = None
-    along_road_m: Optional[float] = None
+    raw_depth: float
+    sign_horiz_dist_m: float
+    curb_distance_m: float
+    along_road_m: float
+    plane_idx: int
 
 
 def _fetch_depth_data(pano_id: str) -> str | None:
@@ -1072,42 +1068,9 @@ def _sample_depth(width, height, planes, indices, heading_deg, pitch_deg):
 CAMERA_HEIGHT_M = 2.5
 
 
-def _estimate_sign_distance(
-    sign_samples: list[DepthSample],
-    sign_pitch: float | None,
-    sign_angular_height: float | None,
-) -> float | None:
-    """Pick the best horizontal-distance estimate from sign-level depth samples.
-
-    Strategy:
-    1. Prefer samples near the actual sign pitch (within ±2° of center).
-    2. Among those, take the median horiz_dist to filter outliers from
-       background surfaces that are further away.
-    3. Reject samples whose horiz_dist < camera-to-ground (too close to be a
-       sign on the sidewalk) or > 200m (unreasonable).
-    """
-    if not sign_samples:
-        return None
-
-    candidates = [
-        s for s in sign_samples
-        if 1.0 < s.horiz_dist < 200.0
-    ]
-    if not candidates:
-        return None
-
-    if sign_pitch is not None:
-        near = [s for s in candidates if abs(s.pitch - sign_pitch) <= 2.0]
-        if near:
-            candidates = near
-
-    dists = sorted(s.horiz_dist for s in candidates)
-    return dists[len(dists) // 2]
-
-
 @app.post("/depth", response_model=DepthResponse)
 async def get_depth(req: DepthRequest):
-    """Fetch and sample depth map for a panorama."""
+    """Sample depth map once at the detection's exact heading/pitch. Fail hard on miss."""
     parsed = _get_depth_for_pano(req.pano_id, req.api_key)
     if not parsed:
         raise HTTPException(status_code=404, detail="Depth data unavailable for this panorama")
@@ -1120,63 +1083,33 @@ async def get_depth(req: DepthRequest):
     if alpha > 180:
         alpha -= 360
 
-    ground_pitches = [-20, -25, -30, -35, -40, -45, -50, -60]
+    raw_depth, pidx = _sample_depth(w, h, planes, indices, sign_h, req.sign_pitch)
+    if raw_depth is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Depth map has no data at heading={sign_h:.1f}° pitch={req.sign_pitch:.1f}°",
+        )
 
-    sign_pitches_set: set[float] = {5, 0, -5, -10}
-    if req.sign_pitch is not None:
-        sp = req.sign_pitch
-        sign_pitches_set.update([sp, sp - 1, sp + 1])
-        if req.sign_angular_height is not None:
-            half_h = req.sign_angular_height / 2
-            sign_pitches_set.update([sp - half_h, sp + half_h])
-    sign_pitches = sorted(sign_pitches_set, reverse=True)
+    horiz_dist = raw_depth * math.cos(math.radians(req.sign_pitch))
+    if not (MIN_SIGN_DIST_M <= horiz_dist <= MAX_SIGN_DIST_M):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Sign distance {horiz_dist:.1f}m outside valid range [{MIN_SIGN_DIST_M}, {MAX_SIGN_DIST_M}]m",
+        )
 
-    ground_samples = []
-    for p in ground_pitches:
-        d, pidx = _sample_depth(w, h, planes, indices, sign_h, p)
-        if d is not None and d < 1000:
-            ground_samples.append(DepthSample(
-                pitch=p, raw_depth=round(d, 2),
-                horiz_dist=round(d * math.cos(math.radians(p)), 2),
-                plane_idx=pidx,
-            ))
-
-    sign_samples = []
-    for p in sign_pitches:
-        d, pidx = _sample_depth(w, h, planes, indices, sign_h, p)
-        if d is not None and d < 1000:
-            sign_samples.append(DepthSample(
-                pitch=p, raw_depth=round(d, 2),
-                horiz_dist=round(d * math.cos(math.radians(p)), 2),
-                plane_idx=pidx,
-            ))
-
-    sign_horiz_dist = _estimate_sign_distance(
-        sign_samples, req.sign_pitch, req.sign_angular_height
-    )
-
-    curb_dist = None
-    along_road = None
-    h_dist = sign_horiz_dist
-    if h_dist is None:
-        best = [s for s in ground_samples if -40 <= s.pitch <= -25]
-        if best:
-            representative = min(best, key=lambda s: abs(s.pitch - (-30)))
-            h_dist = representative.horiz_dist
-    if h_dist is not None:
-        curb_dist = round(abs(h_dist * math.sin(math.radians(alpha))), 2)
-        along_road = round(h_dist * math.cos(math.radians(alpha)), 2)
+    curb_dist = round(abs(horiz_dist * math.sin(math.radians(alpha))), 2)
+    along_road = round(horiz_dist * math.cos(math.radians(alpha)), 2)
 
     return DepthResponse(
         pano_id=req.pano_id,
         width=w, height=h, num_planes=num_planes,
         sign_heading=sign_h, road_bearing=req.road_bearing,
         alpha_deg=round(alpha, 1),
-        ground_samples=ground_samples,
-        sign_samples=sign_samples,
-        sign_horiz_dist_m=round(sign_horiz_dist, 2) if sign_horiz_dist else None,
+        raw_depth=round(raw_depth, 2),
+        sign_horiz_dist_m=round(horiz_dist, 2),
         curb_distance_m=curb_dist,
         along_road_m=along_road,
+        plane_idx=pidx,
     )
 
 
