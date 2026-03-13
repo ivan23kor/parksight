@@ -67,11 +67,34 @@ function toggleCalibrationMode() {
   const panel = document.getElementById("calibrationPanel");
   if (panel) panel.classList.toggle("visible", calibrationMode);
 
+  pendingBaseMark = null;
   if (calibrationMode) {
     loadCalibrationData();
     renderCalibrationPanel();
+    if (
+      calibrationData.length > 0 &&
+      currentDetections.length > 0 &&
+      typeof currentDetectionContext !== "undefined" &&
+      currentDetectionContext &&
+      Number.isFinite(currentDetectionContext.streetBearing)
+    ) {
+      const last = calibrationData[calibrationData.length - 1];
+      let nearest = null;
+      let minDist = Infinity;
+      for (const det of currentDetections) {
+        let dh = Math.abs(det.heading - last.sign_heading);
+        if (dh > 180) dh = 360 - dh;
+        if (dh < minDist) {
+          minDist = dh;
+          nearest = det;
+        }
+      }
+      if (nearest && minDist < 30) {
+        fetchDepthForDetection(nearest, currentDetectionContext.streetBearing, true);
+        return;
+      }
+    }
   }
-  pendingBaseMark = null;
   updateDetectionOverlay();
 }
 
@@ -1032,7 +1055,15 @@ async function handleSignMarking(event) {
       calibrationData.push(refPoint);
       saveCalibrationData();
       renderCalibrationPanel();
-      updateDetectionOverlay();
+      const roadBearing =
+        typeof currentDetectionContext !== "undefined" && currentDetectionContext
+          ? currentDetectionContext.streetBearing
+          : null;
+      if (Number.isFinite(roadBearing)) {
+        fetchDepthForDetection(nearest, roadBearing, true);
+      } else {
+        updateDetectionOverlay();
+      }
 
       const dh = refPoint.horiz_dist * Math.tan((-refPoint.sign_pitch * Math.PI) / 180);
       const btn = document.getElementById("calibrateBtn");
@@ -1107,7 +1138,7 @@ function clearMarkedPoints() {
 /**
  * Fetch depth data for a detected sign and cache it.
  */
-async function fetchDepthForDetection(det, roadBearing) {
+async function fetchDepthForDetection(det, roadBearing, forCalibration = false) {
   const panoId = detectionPanorama?.getPano?.();
   const apiUrl = window.DETECTION_CONFIG?.API_URL;
   if (!panoId || !apiUrl || !Number.isFinite(det.heading) || !Number.isFinite(roadBearing)) return;
@@ -1130,6 +1161,7 @@ async function fetchDepthForDetection(det, roadBearing) {
       return;
     }
     currentDepthData = await resp.json();
+    currentDepthData._forCalibration = forCalibration;
     updateDetectionOverlay();
   } catch (err) {
     console.warn("Depth fetch error:", err);
@@ -1196,16 +1228,6 @@ function renderDepthOverlay(overlay, pov, fov, screenWidth, screenHeight) {
       const bottomPt = toScreen(det.heading, det.pitch - 25);
       if (topPt && bottomPt) {
         overlay.appendChild(mkLine(topPt.x, topPt.y, bottomPt.x, bottomPt.y, "rgba(74, 222, 128, 0.4)", "1.5", "4,4"));
-      }
-    }
-    // Draw previously collected calibration reference points
-    for (const ref of calibrationData) {
-      const basePt = toScreen(ref.base_heading, ref.base_pitch);
-      if (basePt) {
-        overlay.appendChild(mkCircle(basePt.x, basePt.y, 5, "#4ade80"));
-        // Cross
-        overlay.appendChild(mkLine(basePt.x - 6, basePt.y, basePt.x + 6, basePt.y, "#4ade80", "2", null));
-        overlay.appendChild(mkLine(basePt.x, basePt.y - 6, basePt.x, basePt.y + 6, "#4ade80", "2", null));
       }
     }
   }
@@ -1294,11 +1316,24 @@ function renderDepthOverlay(overlay, pov, fov, screenWidth, screenHeight) {
     overlay.appendChild(mkText(pt.x + 10, pt.y + 4, `${sample.raw_depth.toFixed(1)}m`, "#a78bfa", "10", "start"));
   }
 
-  // Draw full 360° dashed orange horizon line at pitch=0
+  // Draw full 360° dashed orange horizon line.
+  // For curb-side signs: offset horizon downward (positive pitch) by atan((sign_center - camera) / dist)
+  // so the sign doesn't incorrectly appear higher above the horizon when farther away.
   {
-    let prevPt = toScreen(0, 0);
-    for (let i = 1; i <= 360; i++) {
-      const curPt = toScreen(i, 0);
+    let horizonPitchOffset = 0;
+    if (signDist != null && signDist > 0 && signDist < 60) {
+      const deltaH = fitDeltaH();
+      if (deltaH != null && deltaH < 0) {
+        const signCenterAboveCamera = -deltaH;
+        horizonPitchOffset = (Math.atan(signCenterAboveCamera / signDist) * 180) / Math.PI;
+      }
+    }
+    let prevPt = null;
+    for (let i = 0; i <= 360; i++) {
+      const heading = i % 360;
+      const weight = Math.max(0, Math.cos(((heading - sign_heading + 180) % 360 - 180) * (Math.PI / 180)));
+      const pitch = horizonPitchOffset * weight * weight;
+      const curPt = toScreen(heading, pitch);
       if (prevPt && curPt) {
         overlay.appendChild(mkLine(prevPt.x, prevPt.y, curPt.x, curPt.y, "#fb923c", "1.5", "3,3"));
       }
@@ -1322,9 +1357,9 @@ function renderDepthOverlay(overlay, pov, fov, screenWidth, screenHeight) {
   }
 
   // Info box
-  if (displayCurb != null || displayAlong != null) {
-    const boxW = 240;
-    const boxH = 98;
+  if (displayCurb != null || displayAlong != null || signDist != null) {
+    const boxW = 260;
+    const boxH = 116;
     const boxX = screenWidth - boxW - 10;
     const boxY = screenHeight - boxH - 10;
     const borderColor = distSource === "depth" ? "#22d3ee" : "#f472b6";
@@ -1344,14 +1379,16 @@ function renderDepthOverlay(overlay, pov, fov, screenWidth, screenHeight) {
     const sourceLabel = distSource === "depth" ? "DEPTH MAP" : distSource === "pitch-model" ? "PITCH MODEL" : "GROUND DEPTH";
     overlay.appendChild(mkText(boxX + 10, lineY, sourceLabel, borderColor, "11", "start"));
     lineY += 18;
+    if (signDist != null) {
+      const signLabel = currentDepthData._forCalibration ? "calibrated" : "best";
+      overlay.appendChild(mkText(boxX + 10, lineY, `Sign dist: ${signDist.toFixed(1)}m (${signLabel})`, "#94a3b8", "12", "start"));
+      lineY += 18;
+    }
     if (displayCurb != null)
-      overlay.appendChild(mkText(boxX + 10, lineY, `Curb dist: ${displayCurb.toFixed(1)}m`, "#f472b6", "13", "start"));
+      overlay.appendChild(mkText(boxX + 10, lineY, `Curb dist: ${displayCurb.toFixed(1)}m ⊥ to road`, "#f472b6", "11", "start"));
     lineY += 18;
     if (displayAlong != null)
-      overlay.appendChild(mkText(boxX + 10, lineY, `Along road: ${displayAlong.toFixed(1)}m`, "#4ade80", "13", "start"));
-    lineY += 18;
-    if (signDist != null)
-      overlay.appendChild(mkText(boxX + 10, lineY, `Sign dist: ${signDist.toFixed(1)}m (${distSource})`, "#94a3b8", "11", "start"));
+      overlay.appendChild(mkText(boxX + 10, lineY, `Along road: ${displayAlong.toFixed(1)}m`, "#4ade80", "11", "start"));
   }
 }
 
