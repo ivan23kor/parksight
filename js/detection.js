@@ -23,6 +23,7 @@ let calibrationMode = false;
 let calibrationData = []; // Reference points: {pano_id, sign_heading, sign_pitch, base_heading, base_pitch, depth_at_base, horiz_dist, timestamp}
 const CALIBRATION_STORAGE_KEY = "parksight_calibration_data";
 const CAMERA_HEIGHT_M = 2.5;
+const SIGN_POST_HEIGHT_M = 3.0; // Assumed height from sign center to post base
 
 function loadCalibrationData() {
   try {
@@ -1261,7 +1262,14 @@ function renderDepthOverlay(overlay, pov, fov, screenWidth, screenHeight) {
   const depthScale = getDepthScaleFactor();
   const signDist = currentDepthData.sign_horiz_dist_m * depthScale;
   const distSource = depthScale !== 1 ? "depth (scaled)" : "depth";
-  const groundProjectionPitch = -(Math.atan(CAMERA_HEIGHT_M / signDist) * 180) / Math.PI;
+  
+  // Perspective-correct base projection: the sign post base is SIGN_POST_HEIGHT_M
+  // directly below the sign center. At distance D, this 3m physical drop maps to
+  // a smaller angular drop (vanishing point effect): atan(3/D) shrinks with distance.
+  const signPitchRad = bestDet ? (bestDet.pitch * Math.PI) / 180 : 0;
+  const groundProjectionPitch =
+    (Math.atan(Math.tan(signPitchRad) - SIGN_POST_HEIGHT_M / signDist) * 180) / Math.PI;
+
   const displayCurb = currentDepthData.curb_distance_m * depthScale;
   const displayAlong = currentDepthData.along_road_m * depthScale;
 
