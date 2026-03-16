@@ -356,7 +356,6 @@ function mergeAngularDetections(detections) {
     confidence,
     class_name: className,
     depth_m: detections[0].depth_m,
-    depth_m_raw: detections[0].depth_m_raw,
     sourceDetections: normalizedDetections.reduce(
       (sum, det) => sum + (det.sourceDetections || 1),
       0,
@@ -1022,7 +1021,7 @@ async function handleSignMarking(event) {
       sign_pitch: nearest.pitch,
       base_heading: pendingBaseMark.heading,
       base_pitch: pendingBaseMark.pitch,
-      depth_at_base: nearest.depth_m_raw || nearest.depth_m || horizDist,
+      depth_at_base: nearest.depth_m || horizDist,
       horiz_dist: horizDist,
       timestamp: Date.now(),
     };
@@ -1224,9 +1223,16 @@ function updateDetectionOverlay() {
     rect.addEventListener("mouseup", (e) => e.stopPropagation());
     overlay.appendChild(rect);
 
-    // Create label — show calibrated depth if available
+    // Create label — show depth, sign count, and layout
     const depthLabel = det.depth_m ? ` | ${det.depth_m.toFixed(1)}m` : "";
-    const label = `${det.class_name} ${Math.round(det.confidence * 100)}%${depthLabel}`;
+    const signCount = det.sourceDetections || 1;
+    let layoutLabel = "";
+    if (signCount > 1) {
+      const msf = det.mergeStackFactor || 0;
+      const arrangement = msf > 0.5 ? "stacked" : msf < 0.2 ? "side-by-side" : "cluster";
+      layoutLabel = ` | ${signCount}x ${arrangement}`;
+    }
+    const label = `${det.class_name} ${Math.round(det.confidence * 100)}%${depthLabel}${layoutLabel}`;
 
     const labelBg = document.createElementNS(
       "http://www.w3.org/2000/svg",
@@ -1247,11 +1253,6 @@ function updateDetectionOverlay() {
     text.setAttribute("font-weight", "bold");
     text.textContent = label;
     overlay.appendChild(text);
-
-    // Add title for native hover tooltip
-    const rawStr = det.depth_m_raw != null ? det.depth_m_raw.toFixed(2) + "m" : "N/A";
-    const calStr = det.depth_m != null ? det.depth_m.toFixed(2) + "m" : "N/A";
-    rect.innerHTML = `<title>${det.class_name}\nConfidence: ${Math.round(det.confidence * 100)}%\nDepth raw (DAv2): ${rawStr}\nDepth calibrated: ${calStr}</title>`;
   }
 }
 
@@ -1679,7 +1680,6 @@ async function runDetectionOnPanorama(
               confidence: det.confidence,
               class_name: det.class_name,
               depth_m: det.depth_m,
-              depth_m_raw: det.depth_m_raw,
             })),
           )
         : result.detections;
@@ -3271,7 +3271,6 @@ function estimateAllSignLocations(cameraLat, cameraLng, options = null) {
         distanceAngularHeight: resolveDetectionDistanceAngularHeight(det),
         pitch: det.pitch,
         depth_m: det.depth_m,
-        depth_m_raw: det.depth_m_raw,
         sourceDetections: det.sourceDetections || 1,
         mergeStackFactor: det.mergeStackFactor || 0,
       };
