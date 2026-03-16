@@ -1073,10 +1073,18 @@
           return;
         }
 
+        const signCount = sign.sourceDetections || 1;
+        let layoutInfo = "";
+        if (signCount > 1) {
+          const msf = sign.mergeStackFactor || 0;
+          const arrangement = msf > 0.5 ? "vertically stacked" : msf < 0.2 ? "side by side" : "cluster";
+          layoutInfo = `<span>${signCount} signs (${arrangement})</span>`;
+        }
         container.innerHTML = `
                 <img src="${state.src}" alt="Detected parking sign preview">
                 <div class="sign-info">
                   <span>Est: ${sign.distance?.toFixed(1)}m</span>
+                  ${layoutInfo}
                 </div>
             `;
       }
