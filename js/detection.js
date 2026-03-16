@@ -2722,14 +2722,23 @@ function projectSignToCurbLine(
     segmentEnd = null,
     lanes = null,
     highway = null,
+    cameraHeading = null,
   } = options;
   if (streetBearing == null) {
     return null;
   }
 
-  const trafficBearing = getTrafficBearing(streetBearing, oneway);
-  // North America: parking signs are always on the driver's right-hand side.
-  const resolvedSide = "right";
+  // Get raw traffic bearing (OSM direction or oneway-corrected)
+  const rawTrafficBearing = getTrafficBearing(streetBearing, oneway);
+  // For two-way streets, orient traffic bearing to match camera direction
+  // so "right" side is relative to where the camera was looking
+  const trafficBearing = oneway
+    ? rawTrafficBearing
+    : orientBearingToMatch(cameraHeading ?? streetBearing, rawTrafficBearing);
+
+  // Infer sign side from heading relative to traffic direction
+  // Falls back to passed side option when sign is nearly parallel to road
+  const resolvedSide = inferDetectionSide(signHeading, trafficBearing, side);
   const edgeOffsetMeters =
     curbOffsetMeters ?? FIXED_SIGN_CENTERLINE_OFFSET_METERS;
   const centerlineAnchor = getStreetCenterlineAnchor(cameraLat, cameraLng, {

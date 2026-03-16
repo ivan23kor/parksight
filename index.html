@@ -1804,19 +1804,24 @@
         const cameraLng = Number.isFinite(panoramaLng)
           ? panoramaLng
           : (sampledPoint?.lon ?? INITIAL_LOCATION.lon);
+        const panoramaPov = detectionPanorama?.getPov?.();
+        const cameraHeading = Number.isFinite(panoramaPov?.heading)
+          ? panoramaPov.heading
+          : currentDetectionContext?.heading ?? null;
         const roadContext =
           (await ensureDetectionRoadContext(cameraLat, cameraLng)) ||
           currentDetectionContext;
         const signLocations = estimateAllSignLocations(cameraLat, cameraLng, {
           streetBearing: roadContext.streetBearing,
           oneway: roadContext.oneway,
-          side: getProjectionSide(roadContext.side),
+          side: roadContext.side ?? "right",
           highway: roadContext.highway || null,
           lanes: roadContext.lanes || null,
           wayGeometry: roadContext.wayGeometry || null,
           segmentIndex: roadContext.segmentIndex ?? null,
           segmentStart: roadContext.segmentStart || null,
           segmentEnd: roadContext.segmentEnd || null,
+          cameraHeading,
         });
         const detectedPanoId =
           detectionPanorama?.getPano?.() || roadContext.panoId;
@@ -1913,10 +1918,6 @@
         statusEl.textContent = `Tap to detect (heading: ${Math.round(currentDetectionContext.heading)}°)`;
         const controls = document.getElementById("detectionControls");
         if (controls) controls.classList.add("visible");
-      }
-
-      function getProjectionSide(viewSide) {
-        return viewSide === "left" ? "right" : "left";
       }
 
       // ── Consolidated state dump ──
