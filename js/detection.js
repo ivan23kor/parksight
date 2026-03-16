@@ -355,7 +355,7 @@ function mergeAngularDetections(detections) {
     angularHeight: mergedAngularHeight,
     confidence,
     class_name: className,
-    depth_m: detections[0].depth_m,
+    depthAnythingMeters: detections[0].depthAnythingMeters,
     sourceDetections: normalizedDetections.reduce(
       (sum, det) => sum + (det.sourceDetections || 1),
       0,
@@ -1002,9 +1002,9 @@ async function handleSignMarking(event) {
       return;
     }
 
-    // Use CNN depth from detection if available, otherwise estimate from pitch
-    const horizDist = nearest.depth_m != null
-      ? nearest.depth_m * Math.cos(Math.atan2(
+    // Use Depth Anything depth from detection if available, otherwise estimate from pitch
+    const horizDist = nearest.depthAnythingMeters != null
+      ? nearest.depthAnythingMeters * Math.cos(Math.atan2(
           Math.sin((nearest.heading - pendingBaseMark.heading) * Math.PI / 180),
           Math.cos((nearest.heading - pendingBaseMark.heading) * Math.PI / 180)))
       : estimateSignDistance(nearest.pitch);
@@ -1021,7 +1021,7 @@ async function handleSignMarking(event) {
       sign_pitch: nearest.pitch,
       base_heading: pendingBaseMark.heading,
       base_pitch: pendingBaseMark.pitch,
-      depth_at_base: nearest.depth_m || horizDist,
+      depth_at_base: nearest.depthAnythingMeters || horizDist,
       horiz_dist: horizDist,
       timestamp: Date.now(),
     };
@@ -1224,7 +1224,7 @@ function updateDetectionOverlay() {
     overlay.appendChild(rect);
 
     // Create label — show depth, sign count, and layout
-    const depthLabel = det.depth_m ? ` | ${det.depth_m.toFixed(1)}m` : "";
+    const depthLabel = det.depthAnythingMeters ? ` | ${det.depthAnythingMeters.toFixed(1)}m` : "";
     const signCount = det.sourceDetections || 1;
     let layoutLabel = "";
     if (signCount > 1) {
@@ -1679,7 +1679,7 @@ async function runDetectionOnPanorama(
               angularHeight: det.angular_height,
               confidence: det.confidence,
               class_name: det.class_name,
-              depth_m: det.depth_m,
+              depthAnythingMeters: det.depth_anything_meters,
             })),
           )
         : result.detections;
@@ -3210,6 +3210,10 @@ function estimateSignLocation(
   cameraHeight = SV_CAMERA_HEIGHT,
 ) {
   const distanceAngularHeight = resolveDetectionDistanceAngularHeight(detection);
+  const depthAnythingDistance =
+    Number.isFinite(detection.depthAnythingMeters) && detection.depthAnythingMeters > 0
+      ? detection.depthAnythingMeters
+      : null;
   const pitchDistance = estimateDistanceFromPitch(
     detection.pitch,
     cameraHeight,
@@ -3219,13 +3223,24 @@ function estimateSignLocation(
   let distance;
   let method;
 
-  if (pitchDistance != null) {
+  if (depthAnythingDistance != null) {
+    distance = depthAnythingDistance;
+    method = "depth-anything";
+  } else if (pitchDistance != null) {
     distance = pitchDistance;
     method = "pitch";
   } else {
     distance = sizeDistance;
     method = "size";
   }
+
+  console.log(
+    `[estimateSignLocation] heading=${detection.heading.toFixed(1)}° ` +
+      `method=${method} dist=${distance.toFixed(1)}m ` +
+      `(depthAnything=${depthAnythingDistance?.toFixed(1) ?? "n/a"}, ` +
+      `pitch=${pitchDistance?.toFixed(1) ?? "n/a"}, ` +
+      `size=${sizeDistance.toFixed(1)})`,
+  );
 
   const dest = projectLatLng(cameraLat, cameraLng, distance, detection.heading);
 
@@ -3270,7 +3285,7 @@ function estimateAllSignLocations(cameraLat, cameraLng, options = null) {
         angularHeight: det.angularHeight,
         distanceAngularHeight: resolveDetectionDistanceAngularHeight(det),
         pitch: det.pitch,
-        depth_m: det.depth_m,
+        depthAnythingMeters: det.depthAnythingMeters,
         sourceDetections: det.sourceDetections || 1,
         mergeStackFactor: det.mergeStackFactor || 0,
       };

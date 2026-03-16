@@ -144,7 +144,7 @@ class AngularDetection(BaseModel):
     angular_height: float
     confidence: float
     class_name: str
-    depth_m: Optional[float] = None
+    depth_anything_meters: Optional[float] = None
 
 
 class SahiRequest(BaseModel):
@@ -933,7 +933,7 @@ async def detect_panorama_impl(request: SahiRequest) -> SahiResponse:
                     angular_height=ang_h,
                     confidence=conf,
                     class_name=cls_name,
-                    depth_m=det_depth_m,
+                    depth_anything_meters=det_depth_m,
                 ))
 
     print(f"Panorama detect: {len(all_angular_dets)} raw detections before NMS")
