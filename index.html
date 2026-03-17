@@ -1821,9 +1821,8 @@
         const cameraLng = Number.isFinite(panoramaLng)
           ? panoramaLng
           : (sampledPoint?.lon ?? INITIAL_LOCATION.lon);
-        const panoramaPov = detectionPanorama?.getPov?.();
-        const cameraHeading = Number.isFinite(panoramaPov?.heading)
-          ? panoramaPov.heading
+        const cameraHeading = Number.isFinite(detectionPov?.heading)
+          ? detectionPov.heading
           : currentDetectionContext?.heading ?? null;
         const roadContext =
           (await ensureDetectionRoadContext(cameraLat, cameraLng)) ||
