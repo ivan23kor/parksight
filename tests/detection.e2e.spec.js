@@ -649,6 +649,8 @@ test.describe("detection flow", () => {
               angular_height: 4.0,
               confidence: 0.87,
               class_name: "parking_sign",
+              depth_anything_meters: 15.2,
+              depth_anything_meters_raw: 15.0,
             },
             {
               heading: 61,
@@ -657,6 +659,8 @@ test.describe("detection flow", () => {
               angular_height: 3.0,
               confidence: 0.81,
               class_name: "parking_sign",
+              depth_anything_meters: 12.8,
+              depth_anything_meters_raw: 12.5,
             },
           ],
           total_inference_time_ms: 55,
