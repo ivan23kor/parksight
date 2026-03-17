@@ -1105,7 +1105,6 @@ function requestPanoramaLinkSpotPosition(currentPanoId, link) {
  * Initialize or update the detection panorama.
  */
 function initDetectionPanorama(panoId, heading, container) {
-  loadCalibrationData();
   const pov = getDefaultPov(heading);
 
   if (detectionPanorama) {
