@@ -957,13 +957,13 @@ function updateDetectionOverlay() {
     labelBg.setAttribute("y", screen.y - 20);
     labelBg.setAttribute("width", label.length * 7.5 + 10);
     labelBg.setAttribute("height", "18");
-    labelBg.setAttribute("fill", color);
+    labelBg.setAttribute("fill", "white");
     overlay.appendChild(labelBg);
 
     const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
     text.setAttribute("x", screen.x + 4);
     text.setAttribute("y", screen.y - 6);
-    text.setAttribute("fill", "white");
+    text.setAttribute("fill", "black");
     text.setAttribute("font-size", "12");
     text.setAttribute("font-weight", "bold");
     text.textContent = label;
