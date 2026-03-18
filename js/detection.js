@@ -167,6 +167,7 @@ function mergeAngularDetections(detections) {
 
   let minHeadingOffset = 0 - detections[0].angularWidth / 2;
   let maxHeadingOffset = 0 + detections[0].angularWidth / 2;
+  const detectionDepths = [];
 
   for (let i = 1; i < detections.length; i += 1) {
     const det = detections[i];
@@ -191,7 +192,22 @@ function mergeAngularDetections(detections) {
       confidence = det.confidence;
       className = det.class_name;
     }
+    // Collect valid depths for aggregation
+    if (Number.isFinite(det.depthAnythingMeters) && det.depthAnythingMeters > 0) {
+      detectionDepths.push(det.depthAnythingMeters);
+    }
   }
+
+  // Also collect depth from the first detection (loop starts at i=1)
+  if (Number.isFinite(detections[0].depthAnythingMeters) && detections[0].depthAnythingMeters > 0) {
+    detectionDepths.push(detections[0].depthAnythingMeters);
+  }
+
+  // Aggregate depth: use median of cluster members instead of detection[0] only
+  // Median is robust to outlier depth estimates from different angular heights
+  const mergedDepth = detectionDepths.length > 0
+    ? median(detectionDepths)
+    : null;
 
   const mergedAngularWidth = maxHeadingOffset - minHeadingOffset;
   const mergedAngularHeight = maxPitch - minPitch;
@@ -201,8 +217,9 @@ function mergeAngularDetections(detections) {
   const representativeWidths = normalizedDetections
     .map((det) => det.distanceAngularWidth)
     .filter((value) => Number.isFinite(value) && value > 0);
-  const representativeHeight =
-    median(representativeHeights) ?? mergedAngularHeight;
+  const { outlierIndices: heightOutlierIndices, consensusMedian } =
+    partitionConsensusOutliers(representativeHeights);
+  const representativeHeight = consensusMedian ?? mergedAngularHeight;
   const representativeWidth =
     median(representativeWidths) ?? mergedAngularWidth;
   const heightExpansion = mergedAngularHeight / Math.max(representativeHeight, 0.05);
@@ -217,10 +234,20 @@ function mergeAngularDetections(detections) {
     mergedAngularHeight * (1 - mergeStackFactor) +
     representativeHeight * mergeStackFactor;
 
+  // Map representativeHeights indices back to normalizedDetections indices
+  const heightSourceIndex = [];
+  normalizedDetections.forEach((det, i) => {
+    if (Number.isFinite(det.distanceAngularHeight) && det.distanceAngularHeight > 0) {
+      heightSourceIndex.push(i);
+    }
+  });
+  const outlierDetectionIndices = new Set(heightOutlierIndices.map((k) => heightSourceIndex[k]));
+
   // Normalize sign count by height ratio: physical_height / standard_height (0.45m)
   // When depth is available, compute physical height from angular height + distance.
   // When depth is unavailable, count each detection as 1 (no normalization possible).
-  const normalizedSignCount = normalizedDetections.reduce((sum, det) => {
+  const normalizedSignCount = normalizedDetections.reduce((sum, det, idx) => {
+    if (outlierDetectionIndices.has(idx)) return sum;
     if (det.depthAnythingMeters > 0 && det.angularHeight > 0) {
       const angularHeightRad = (det.angularHeight * Math.PI) / 180;
       const physicalHeightMeters = det.depthAnythingMeters * Math.tan(angularHeightRad);
@@ -241,7 +268,7 @@ function mergeAngularDetections(detections) {
     angularHeight: mergedAngularHeight,
     confidence,
     class_name: className,
-    depthAnythingMeters: detections[0].depthAnythingMeters,
+    depthAnythingMeters: mergedDepth ?? detections[0].depthAnythingMeters,
     depthAnythingMetersRaw: detections[0].depthAnythingMetersRaw,
     sourceDetections: normalizedSignCount,
     sourceMedianAngularHeight: representativeHeight,
@@ -1816,6 +1843,46 @@ function median(values) {
     return (sorted[mid - 1] + sorted[mid]) / 2;
   }
   return sorted[mid];
+}
+
+function partitionConsensusOutliers(heights) {
+  if (heights.length <= 1) {
+    return { consensusIndices: heights.map((_, i) => i), outlierIndices: [], consensusMedian: median(heights) };
+  }
+
+  const indexed = heights.map((h, i) => ({ h, i }));
+  indexed.sort((a, b) => a.h - b.h);
+
+  // Sliding window: longest run where max/min <= 1.2
+  let bestStart = 0, bestLen = 1, left = 0;
+  for (let right = 1; right < indexed.length; right++) {
+    while (indexed[right].h > indexed[left].h * 1.2) left++;
+    if (right - left + 1 > bestLen) {
+      bestStart = left;
+      bestLen = right - left + 1;
+    }
+  }
+
+  // No consensus formed (all singletons) — keep everything
+  if (bestLen <= 1 && indexed.length > 1) {
+    return { consensusIndices: heights.map((_, i) => i), outlierIndices: [], consensusMedian: median(heights) };
+  }
+
+  const consensusSet = new Set(indexed.slice(bestStart, bestStart + bestLen).map((e) => e.i));
+  const consMed = median(indexed.slice(bestStart, bestStart + bestLen).map((e) => e.h));
+
+  const consensusIndices = [], outlierIndices = [];
+  for (let i = 0; i < heights.length; i++) {
+    if (consensusSet.has(i)) {
+      consensusIndices.push(i);
+    } else if (heights[i] > consMed * 2 || heights[i] < consMed * 0.2) {
+      outlierIndices.push(i);
+    } else {
+      consensusIndices.push(i);
+    }
+  }
+
+  return { consensusIndices, outlierIndices, consensusMedian: consMed };
 }
 
 function normalizeAngularDetection(detection) {
