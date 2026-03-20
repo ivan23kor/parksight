@@ -1046,11 +1046,18 @@ function updateDetectionOverlay() {
     rect.addEventListener("mouseup", (e) => e.stopPropagation());
     overlay.appendChild(rect);
 
-    // Create label — show depth
+    // Create label — show depth, physical size, aspect ratio
     const depthLabel = det.depthAnythingMeters
       ? ` | ${det.depthAnythingMeters.toFixed(1)}m`
       : "";
-    const label = `${det.class_name} ${Math.round(det.confidence * 100)}%${depthLabel}`;
+    let sizeLabel = "";
+    if (det.referenceHeightCm && det.angularHeight && det.angularWidth) {
+      const aspectRatio = det.angularHeight / det.angularWidth;
+      const physicalWidthCm = Math.round(det.referenceHeightCm / aspectRatio);
+      const physicalHeightCm = Math.round(det.referenceHeightCm);
+      sizeLabel = ` | ${physicalHeightCm}×${physicalWidthCm}cm (${aspectRatio.toFixed(2)})`;
+    }
+    const label = `${det.class_name} ${Math.round(det.confidence * 100)}%${depthLabel}${sizeLabel}`;
 
     const labelBg = document.createElementNS(
       "http://www.w3.org/2000/svg",
