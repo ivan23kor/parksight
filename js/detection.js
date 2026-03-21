@@ -19,6 +19,10 @@ const panoramaLinkSpotRequestsInFlight = new Set();
 let debugOverlaysEnabled = false;
 let debugMapLayer = null; // Leaflet layer group for debug overlays on 2D map
 
+// OCR modal state
+let ocrModalEl = null;
+let ocrResults = new Map(); // Cache OCR results by detection index
+
 
 /**
  * Calculate FOV from Street View zoom level.
@@ -1025,7 +1029,7 @@ function updateDetectionOverlay() {
       rect.style.filter = "none";
     });
 
-    // Click to save sign
+    // Click to show OCR modal or save sign
     rect.addEventListener("click", async (e) => {
       e.stopPropagation();
       e.preventDefault();
@@ -1033,6 +1037,14 @@ function updateDetectionOverlay() {
       const containerRect = container.getBoundingClientRect();
       const clickX = e.clientX - containerRect.left;
       const clickY = e.clientY - containerRect.top;
+
+      // Show OCR modal if available
+      if (det.ocrResult) {
+        showOcrModal(det.ocrResult, e.clientX, e.clientY);
+        return;
+      }
+
+      // Otherwise, save sign
       const clickAngular = screenToAngular(
         clickX,
         clickY,
@@ -1528,11 +1540,12 @@ async function runDetectionOnPanorama(
       detectionMode === "multi-slice"
         ? `${result.slices_count} slices`
         : "single view";
-    if (statusEl) {
-      statusEl.textContent =
-        count > 0
-          ? `Found ${count} parking sign${count > 1 ? "s" : ""} (${modeSummary}, ${timeMs.toFixed(0)}ms). Click a box to save.`
-          : `No parking signs detected (${modeSummary}, ${timeMs.toFixed(0)}ms)`;
+
+    // Run OCR on all detections (async, non-blocking)
+    if (count > 0) {
+      runOcrOnAllDetections();
+    } else if (statusEl) {
+      statusEl.textContent = `No parking signs detected (${modeSummary}, ${timeMs.toFixed(0)}ms)`;
     }
 
     return result;
@@ -1540,6 +1553,205 @@ async function runDetectionOnPanorama(
     console.error("Detection error:", err);
     if (statusEl) statusEl.textContent = `Detection failed: ${err.message}`;
     throw err;
+  }
+}
+
+
+// ============================================================================
+// OCR Modal Functions
+// ============================================================================
+
+/**
+ * Create OCR modal element if it doesn't exist.
+ */
+function ensureOcrModal() {
+  if (ocrModalEl) return;
+
+  ocrModalEl = document.createElement("div");
+  ocrModalEl.id = "ocrModal";
+  ocrModalEl.style.cssText = `
+    position: fixed;
+    z-index: 10000;
+    background: rgba(0, 0, 0, 0.9);
+    color: white;
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    max-width: 320px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+    display: none;
+    line-height: 1.4;
+  `;
+  document.body.appendChild(ocrModalEl);
+
+  // Close on click outside
+  document.addEventListener("click", (e) => {
+    if (ocrModalEl && !ocrModalEl.contains(e.target)) {
+      hideOcrModal();
+    }
+  });
+}
+
+/**
+ * Hide OCR modal.
+ */
+function hideOcrModal() {
+  if (ocrModalEl) {
+    ocrModalEl.style.display = "none";
+  }
+}
+
+/**
+ * Show OCR modal at position with results.
+ */
+function showOcrModal(ocrResult, x, y) {
+  ensureOcrModal();
+
+  if (!ocrResult || !ocrResult.is_parking_sign) {
+    ocrModalEl.innerHTML = `<div style="color: #f87171;">Not a parking sign</div>
+      <div style="color: #9ca3af; font-size: 11px; margin-top: 4px;">${ocrResult?.rejection_reason || "Unknown"}</div>`;
+  } else {
+    const rulesHtml = (ocrResult.rules || []).map((rule, i) => {
+      const actionColor = {
+        no_parking: "#ef4444",
+        no_standing: "#f97316",
+        no_stopping: "#dc2626",
+        parking_allowed: "#22c55e",
+        time_limit: "#3b82f6",
+        loading_zone: "#8b5cf6",
+        permit_required: "#f59e0b",
+        tow_zone: "#dc2626",
+      }[rule.action] || "#9ca3af";
+
+      const daysStr = rule.days ? rule.days.map(d => d.toUpperCase()).join(", ") : "Any day";
+      const timeStr = rule.time_start && rule.time_end
+        ? `${rule.time_start}–${rule.time_end}`
+        : "Any time";
+      const limitStr = rule.time_limit_minutes ? `${rule.time_limit_minutes}min` : "";
+      const payStr = rule.payment_required === true ? "💰" : rule.payment_required === false ? "🆓" : "";
+      const arrowStr = rule.arrow_direction && rule.arrow_direction !== "none"
+        ? ` ${rule.arrow_direction === "left" ? "←" : rule.arrow_direction === "right" ? "→" : "↔"}`
+        : "";
+
+      return `
+        <div style="margin-bottom: 8px; padding: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; border-left: 3px solid ${actionColor};">
+          <div style="font-weight: 600; color: ${actionColor}; text-transform: uppercase; font-size: 11px;">
+            ${rule.action.replace(/_/g, " ")}${arrowStr}
+          </div>
+          <div style="margin-top: 4px; font-size: 12px;">
+            ${daysStr}<br/>
+            ${timeStr} ${limitStr} ${payStr}
+          </div>
+          ${rule.additional_text ? `<div style="color: #9ca3af; font-size: 11px; margin-top: 2px;">${rule.additional_text}</div>` : ""}
+        </div>
+      `;
+    }).join("");
+
+    ocrModalEl.innerHTML = `
+      <div style="font-weight: 600; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+        <span>Parking Rules</span>
+        <span style="font-size: 10px; color: #9ca3af;">${ocrResult.confidence_readable || "medium"} confidence</span>
+      </div>
+      ${rulesHtml || "<div style='color: #9ca3af;'>No rules extracted</div>"}
+      ${ocrResult.raw_text ? `<details style="margin-top: 8px;"><summary style="cursor: pointer; color: #9ca3af; font-size: 11px;">Raw text</summary><pre style="margin: 4px 0 0; font-size: 10px; white-space: pre-wrap; color: #d1d5db;">${ocrResult.raw_text}</pre></details>` : ""}
+      ${ocrResult.notes ? `<div style="margin-top: 8px; color: #fbbf24; font-size: 11px;">⚠️ ${ocrResult.notes}</div>` : ""}
+    `;
+  }
+
+  // Position modal near click, but keep in viewport
+  const modalWidth = 320;
+  const modalHeight = ocrModalEl.offsetHeight || 200;
+  const viewportWidth = window.innerWidth;
+  const viewportHeight = window.innerHeight;
+
+  let left = x + 10;
+  let top = y - 10;
+
+  if (left + modalWidth > viewportWidth) {
+    left = x - modalWidth - 10;
+  }
+  if (top + modalHeight > viewportHeight) {
+    top = viewportHeight - modalHeight - 10;
+  }
+  if (top < 10) top = 10;
+  if (left < 10) left = 10;
+
+  ocrModalEl.style.left = `${left}px`;
+  ocrModalEl.style.top = `${top}px`;
+  ocrModalEl.style.display = "block";
+}
+
+/**
+ * Run OCR on all detections after YOLO finishes.
+ */
+async function runOcrOnAllDetections() {
+  const apiUrl = window.DETECTION_CONFIG?.API_URL;
+  if (!apiUrl || !detectionPanorama || currentDetections.length === 0) return;
+
+  const panoId = detectionPanorama.getPano();
+  if (!panoId) return;
+
+  const statusEl = document.getElementById("status") || document.getElementById("detectionStatus");
+  if (statusEl) statusEl.textContent = `Running OCR on ${currentDetections.length} sign(s)...`;
+
+  // Process detections in parallel (max 3 at a time)
+  const batchSize = 3;
+  for (let i = 0; i < currentDetections.length; i += batchSize) {
+    const batch = currentDetections.slice(i, i + batchSize);
+    await Promise.all(batch.map(async (det, batchIdx) => {
+      const detIdx = i + batchIdx;
+      try {
+        // Get cropped sign image
+        const cropPlan = await buildDetectionCropPlan(det, panoId, null);
+        const { session, requestBody } = cropPlan;
+
+        // Fetch tiles and get base64 image
+        const cropResp = await fetch(`${apiUrl}/crop-sign-tiles`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...requestBody, include_image: true, save: false }),
+        });
+
+        if (!cropResp.ok) {
+          console.warn(`OCR: failed to crop detection ${detIdx}`);
+          return;
+        }
+
+        const cropData = await cropResp.json();
+        if (!cropData.image_base64) {
+          console.warn(`OCR: no image for detection ${detIdx}`);
+          return;
+        }
+
+        // Call OCR endpoint
+        const ocrResp = await fetch(`${apiUrl}/ocr-sign`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image_base64: cropData.image_base64 }),
+        });
+
+        if (!ocrResp.ok) {
+          console.warn(`OCR: failed for detection ${detIdx}`);
+          return;
+        }
+
+        const ocrResult = await ocrResp.json();
+        ocrResults.set(detIdx, ocrResult);
+        det.ocrResult = ocrResult; // Store on detection object
+
+        console.log(`OCR detection ${detIdx}:`, ocrResult);
+      } catch (err) {
+        console.warn(`OCR error for detection ${detIdx}:`, err);
+      }
+    }));
+  }
+
+  updateDetectionOverlay();
+
+  if (statusEl) {
+    const ocrCount = ocrResults.size;
+    statusEl.textContent = `Found ${currentDetections.length} sign(s). OCR: ${ocrCount}/${currentDetections.length}. Click for details.`;
   }
 }
 

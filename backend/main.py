@@ -11,7 +11,7 @@ import json as _json
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any
 from urllib.parse import parse_qs, urlparse
 
 import logging
@@ -1081,6 +1081,156 @@ async def detect_panorama(request: SahiRequest):
 async def detect_sahi(request: SahiRequest):
     """Compatibility alias for the panorama detection endpoint."""
     return await detect_panorama_impl(request)
+
+
+# OCR prompt for parking sign parsing
+OCR_PROMPT = """You are a parking sign parser. You will receive a cropped image from a street-level panorama that a parking-sign detector flagged. Your job is to extract structured parking regulation data.
+
+**CRITICAL: Respond with valid JSON only. No prose, no markdown headers, no explanations outside the JSON structure. Your entire response must be parseable by `JSON.parse()`.**
+
+## Step 1 — Validate
+First, determine whether this image actually contains a parking or standing regulation sign. If it does NOT (e.g., it is a street name, speed limit, bus stop, construction sign, advertisement, utility pole, or any other non-parking object), respond ONLY with:
+```
+{"is_parking_sign": false, "rejection_reason": "<brief description of what is actually shown>"}
+```
+Do NOT attempt to extract parking rules from non-parking images.
+
+## Step 2 — Extract rules
+Every sign is treated as a sequence of one or more rules. A sign with a single restriction is simply a sequence of length one. Extract each rule as a separate entry in the `rules` array, ordered top to bottom.
+
+**Payment splitting rule:** If a single sign plate allows parking with a time limit but payment is required on some days and free on others, split that plate into two separate rule entries — one for the paid days and one for the free days — even if the time window and limit are identical. This is in addition to any other splits required by different time windows or stacked plates.
+
+Your entire response must conform exactly to this JSON structure:
+```
+{
+  "is_parking_sign": true,
+  "confidence_readable": "high" | "medium" | "low",
+  "rules": [
+    {
+      "action": "no_parking" | "no_standing" | "no_stopping" | "parking_allowed" | "tow_zone" | "loading_zone" | "permit_required" | "time_limit",
+      "time_limit_minutes": <integer or null>,
+      "days": ["mon","tue","wed","thu","fri","sat","sun"] or null,
+      "time_start": "HH:MM" or null,
+      "time_end": "HH:MM" or null,
+      "payment_required": true | false | null,
+      "permit_zone": "<zone identifier string or null>",
+      "arrow_direction": "left" | "right" | "both" | "none" | null,
+      "additional_text": "<any other text on this part of the sign>"
+    }
+  ],
+  "raw_text": "<all text you can read on the sign, top to bottom, separated by newlines>",
+  "notes": "<anything ambiguous, partially occluded, or uncertain. null if nothing to note>"
+}
+```
+
+## Field guidance
+- **`action`:** Describes what the rule permits or prohibits during its window.
+- **`payment_required`:** `true` if a meter, pay station, or "PAY" instruction applies. `false` if parking is free during this window. `null` if not determinable from the sign.
+- **`days`:** List only the days this specific rule applies to. `"MON THRU FRI"` → `["mon","tue","wed","thu","fri"]`. `"EXCEPT SUNDAY"` → all days except Sunday.
+- **`time_start` / `time_end`:** 24-hour format. `"7AM"` → `"07:00"`, `"6P"` → `"18:00"`.
+- **`arrow_direction`:** Direction from the sign post that this rule applies to.
+- **`confidence_readable`:** Reflects the hardest-to-read rule on the sign. If any plate is partially occluded or at a steep angle, set to `"low"` and explain in `"notes"`.
+- Do NOT hallucinate text. If you cannot read a word, write `[illegible]` in `raw_text` and note it.
+- Do NOT add any text, commentary, or formatting outside the JSON object."""
+
+
+class OcrSignRequest(BaseModel):
+    """Request for OCR parsing of a detected parking sign."""
+    image_base64: str  # Base64-encoded image data
+
+
+class OcrSignResponse(BaseModel):
+    """Response from OCR parsing of a parking sign."""
+    is_parking_sign: bool
+    confidence_readable: Optional[str] = None
+    rules: Optional[list[dict]] = None
+    raw_text: Optional[str] = None
+    notes: Optional[str] = None
+    rejection_reason: Optional[str] = None
+    inference_time_ms: float
+
+
+@app.post("/ocr-sign", response_model=OcrSignResponse)
+async def ocr_sign(request: OcrSignRequest):
+    """
+    Parse parking sign text using vision LLM (Z AI GLM-4.6v-flash).
+
+    Takes a base64-encoded cropped sign image and returns structured
+    parking regulation data including rules, time limits, and payment info.
+    """
+    import os
+
+    api_key = os.environ.get("Z_AI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="Z_AI_API_KEY not configured")
+
+    # Build data URL from base64
+    image_data_url = f"data:image/jpeg;base64,{request.image_base64}"
+
+    start_time = time.time()
+
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(
+                "https://api.z.ai/api/coding/paas/v4/chat/completions",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}"
+                },
+                json={
+                    "model": "glm-4.6v-flash",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": image_data_url}
+                                },
+                                {
+                                    "type": "text",
+                                    "text": OCR_PROMPT
+                                }
+                            ]
+                        }
+                    ],
+                    "max_tokens": 4096
+                },
+                timeout=60.0
+            )
+            resp.raise_for_status()
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=502, detail=f"Z AI API error: {e}")
+
+    inference_time_ms = (time.time() - start_time) * 1000
+
+    data = resp.json()
+
+    if not data.get("choices") or not data["choices"][0].get("message", {}).get("content"):
+        raise HTTPException(status_code=502, detail="Empty response from Z AI")
+
+    content = data["choices"][0]["message"]["content"].strip()
+
+    # Parse JSON response
+    try:
+        # Remove markdown code blocks if present
+        if content.startswith("```"):
+            lines = content.split("\n")
+            content = "\n".join(lines[1:-1] if lines[-1] == "```" else lines[1:])
+
+        parsed = _json.loads(content)
+    except _json.JSONDecodeError as e:
+        raise HTTPException(status_code=502, detail=f"Failed to parse OCR response: {e}")
+
+    return OcrSignResponse(
+        is_parking_sign=parsed.get("is_parking_sign", False),
+        confidence_readable=parsed.get("confidence_readable"),
+        rules=parsed.get("rules"),
+        raw_text=parsed.get("raw_text"),
+        notes=parsed.get("notes"),
+        rejection_reason=parsed.get("rejection_reason"),
+        inference_time_ms=round(inference_time_ms, 1)
+    )
 
 
 if __name__ == "__main__":
