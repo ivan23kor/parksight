@@ -366,7 +366,6 @@
         </button>
         <div id="detectionControls">
           <button id="redetectBtn">Detect</button>
-          <button id="debugBtn" type="button">Debug Info</button>
         </div>
         <div id="detectionPanorama"></div>
         <svg id="detectionOverlay"></svg>
@@ -1569,16 +1568,6 @@
         document
           .getElementById("redetectBtn")
           .addEventListener("click", rerunDetection);
-        document
-          .getElementById("debugBtn")
-          .addEventListener("click", function () {
-            const dumpEl = document.getElementById("parksight-dump");
-            if (dumpEl.style.display !== "none") {
-              dumpEl.style.display = "none";
-              return;
-            }
-            window._dump();
-          });
 
         // Click map to open closest panorama
         map.on("click", async (e) => {

@@ -21,5 +21,10 @@ window.GOOGLE_CONFIG = {
 // Parking sign detection API configuration
 window.DETECTION_CONFIG = {
     API_URL: 'http://127.0.0.1:8000',
-    CONFIDENCE_THRESHOLD: 0.15
+    CONFIDENCE_THRESHOLD: 0.15,
+    // Depth calibration parameters
+    // For affine calibration: d_calibrated = DEPTH_SCALE_FACTOR * d_raw + DEPTH_SHIFT_M
+    DEPTH_SCALE_FACTOR: 1.0,  // Scale factor for Depth Anything estimates (default: no scaling)
+    DEPTH_SHIFT_M: 0.0,        // Additive shift for depth estimates in meters (default: no shift)
+    DEPTH_CALIBRATION_MODE: "single_reference"  // "none" | "single_reference" | "affine"
 };
