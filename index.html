@@ -987,25 +987,6 @@
         detections.forEach((detection, detectionIndex) => {
           if (!detection.camera) return;
 
-          const roadMarkerLatLngs = buildDetectionRoadMarkerLatLngs(detection);
-          if (roadMarkerLatLngs) {
-            L.polyline(roadMarkerLatLngs, {
-              color: "rgba(17, 24, 39, 0.45)",
-              weight: 6,
-              opacity: 0.9,
-              interactive: false,
-            }).addTo(signMarkersLayer);
-
-            L.polyline(roadMarkerLatLngs, {
-              color: "#f59e0b",
-              weight: 3,
-              opacity: 0.95,
-              dashArray: "10 8",
-              lineCap: "round",
-              lineJoin: "round",
-              interactive: false,
-            }).addTo(signMarkersLayer);
-          }
 
           const cameraCircle = L.circle(
             [detection.camera.lat, detection.camera.lng],
