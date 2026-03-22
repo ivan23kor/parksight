@@ -1186,7 +1186,7 @@ async def ocr_sign(request: OcrSignRequest):
                 "http://localhost:8317/v1/chat/completions",
                 headers={
                     "Content-Type": "application/json",
-                    "Authorization": "Bearer sk-40b1b38c2d991296dfa3cad830829dfc2e9f7764eab400a2"
+                    "Authorization": f"Bearer {os.environ.get('CLI_PROXY_API_KEY')}"
                 },
                 json={
                     "model": "amp-haiku",

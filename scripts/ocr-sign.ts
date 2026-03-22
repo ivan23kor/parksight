@@ -98,7 +98,7 @@ Your entire response must conform exactly to this JSON structure:
 - Do NOT add any text, commentary, or formatting outside the JSON object.`;
 
 async function main() {
-  const apiKey = "sk-40b1b38c2d991296dfa3cad830829dfc2e9f7764eab400a2";
+  const apiKey = process.env.CLI_PROXY_API_KEY;
 
   // Use provided path or find latest screenshot
   let screenshotPath = process.argv[2];
