@@ -26,8 +26,6 @@ let ocrResults = new Map(); // Cache OCR results by detection index
 // Rule curve constants
 const RULE_CATEGORY_COLORS = {
   no_parking: "#ef4444",
-  no_standing: "#f97316",
-  no_stopping: "#dc2626",
   parking_allowed: "#22c55e",
   loading_zone: "#8b5cf6",
   permit_required: "#f59e0b",

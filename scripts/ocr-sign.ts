@@ -62,7 +62,7 @@ Your entire response must conform exactly to this JSON structure:
   "confidence_readable": "high" | "medium" | "low",
   "rules": [
     {
-      "category": "no_parking" | "no_standing" | "no_stopping" | "parking_allowed" | "loading_zone" | "permit_required",
+      "category": "no_parking" | "parking_allowed" | "loading_zone" | "permit_required",
       "time_limit_minutes": <integer or null>,
       "days": ["mon","tue","wed","thu","fri","sat","sun"] or null,
       "time_start": "HH:MM" or null,

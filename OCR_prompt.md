@@ -23,7 +23,7 @@ Respond with this JSON structure:
   "confidence_readable": "high" | "medium" | "low",
   "rules": [
     {
-      "action": "no_parking" | "no_standing" | "no_stopping" | "parking_allowed" | "tow_zone" | "loading_zone" | "permit_required" | "time_limit",
+      "action": "no_parking" | "parking_allowed" | "loading_zone" | "permit_required" | "time_limit",
       "time_limit_minutes": <integer or null>,
       "days": ["mon","tue","wed","thu","fri","sat","sun"] or null,
       "time_start": "HH:MM" or null,
@@ -32,6 +32,15 @@ Respond with this JSON structure:
       "permit_zone": "<zone identifier string or null>",
       "arrow_direction": "left" | "right" | "both" | "none" | null,
       "additional_text": "<any other text on this part of the sign>"
+    }
+  ],
+  "tow_zones": [
+    {
+      "days": ["mon","tue","wed","thu","fri","sat","sun"] or null,
+      "time_start": "HH:MM" or null,
+      "time_end": "HH:MM" or null,
+      "arrow_direction": "left" | "right" | "both" | "none" | null,
+      "additional_text": "<any other text on this tow plate or null>"
     }
   ],
   "raw_text": "<all text you can read on the sign, top to bottom, separated by newlines>",

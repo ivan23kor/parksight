@@ -37,6 +37,7 @@ DETECTED_SIGNS_DIR.mkdir(exist_ok=True)
 print(f"Loading model from: {MODEL_PATH}")
 model = YOLO(str(MODEL_PATH))
 print(f"Model loaded. Classes: {model.names}")
+print(f"YOLO device: {model.device}, model type: {model.type}")
 
 # Load Depth Anything V2 model at startup
 _depth_device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -738,38 +739,48 @@ async def preview_sign(request: SignPreviewRequest):
 async def detect(request: DetectionRequest):
     """
     Run parking sign detection on an image.
-    
+
     Args:
         request: DetectionRequest with image_url and optional confidence threshold
-        
+
     Returns:
         DetectionResponse with bounding boxes and inference time
     """
     if not request.image_url:
         raise HTTPException(status_code=400, detail="image_url is required")
-    
+
+    t_start_total = time.time()
+
     # Fetch image
     try:
+        t_fetch_start = time.time()
         async with httpx.AsyncClient() as client:
             resp = await client.get(request.image_url, timeout=10.0)
             resp.raise_for_status()
             image_bytes = resp.content
+        t_fetch = (time.time() - t_fetch_start) * 1000
     except httpx.HTTPError as e:
         raise HTTPException(status_code=400, detail=f"Failed to fetch image: {e}")
-    
+
     # Load image
     try:
+        t_pil_start = time.time()
         image = Image.open(io.BytesIO(image_bytes))
         image_width, image_height = image.size
+        t_pil = (time.time() - t_pil_start) * 1000
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to load image: {e}")
-    
+
     # Run inference
-    start_time = time.time()
+    t_yolo_start = time.time()
     results = model.predict(image, conf=request.confidence, verbose=False)
-    inference_time_ms = (time.time() - start_time) * 1000
-    
+    t_yolo = (time.time() - t_yolo_start) * 1000
+
+    # Extract ultralytics internal timing
+    yolo_speed = results[0].speed if results else {}
+
     # Parse results
+    t_parse_start = time.time()
     detections = []
     for r in results:
         if r.boxes is not None:
@@ -777,7 +788,7 @@ async def detect(request: DetectionRequest):
                 cls_id = int(box.cls[0])
                 x1, y1, x2, y2 = map(float, box.xyxy[0].tolist())
                 conf = float(box.conf[0])
-                
+
                 detections.append(Detection(
                     x1=x1,
                     y1=y1,
@@ -786,10 +797,14 @@ async def detect(request: DetectionRequest):
                     confidence=conf,
                     class_name=model.names[cls_id],
                 ))
-    
+    t_parse = (time.time() - t_parse_start) * 1000
+    t_total = (time.time() - t_start_total) * 1000
+
+    print(f"PROFILE /detect: fetch={t_fetch:.0f}ms pil={t_pil:.0f}ms yolo={t_yolo:.0f}ms (preproc={yolo_speed.get('preprocess', 0):.0f}ms infer={yolo_speed.get('inference', 0):.0f}ms postproc={yolo_speed.get('postprocess', 0):.0f}ms) parse={t_parse:.0f}ms total={t_total:.0f}ms detections={len(detections)}")
+
     return DetectionResponse(
         detections=detections,
-        inference_time_ms=round(inference_time_ms, 1),
+        inference_time_ms=round(t_yolo, 1),
         image_width=image_width,
         image_height=image_height,
     )
@@ -905,6 +920,8 @@ async def detect_panorama_impl(request: SahiRequest) -> SahiResponse:
     runs YOLO on each, converts detections to angular coordinates,
     and merges with NMS.
     """
+    t_start_total = time.time()
+
     # Two-image SAHL: calculate required slice FOV to cover requested FOV with overlap
     num_slices = 2
     slice_fov = request.fov / (2 - request.overlap)
@@ -923,6 +940,7 @@ async def detect_panorama_impl(request: SahiRequest) -> SahiResponse:
           f"step={step:.1f}°, headings={[f'{h:.1f}' for h in slices]}")
 
     # Fetch all slice images in parallel
+    t_fetch_start = time.time()
     async def fetch_slice(client: httpx.AsyncClient, heading: float) -> tuple[float, bytes | None]:
         url = build_streetview_url(
             request.pano_id, heading, request.pitch, slice_fov,
@@ -939,38 +957,48 @@ async def detect_panorama_impl(request: SahiRequest) -> SahiResponse:
     async with httpx.AsyncClient() as client:
         tasks = [fetch_slice(client, h) for h in slices]
         results = await asyncio.gather(*tasks)
+    t_fetch = (time.time() - t_fetch_start) * 1000
 
     # Run inference on each slice and collect angular detections
     all_angular_dets: list[AngularDetection] = []
-    total_inference_ms = 0.0
+    total_yolo_ms = 0.0
+    total_depth_ms = 0.0
+    total_postproc_ms = 0.0
 
     for slice_heading, image_bytes in results:
         if image_bytes is None:
             continue
 
         try:
+            t_pil_start = time.time()
             image = Image.open(io.BytesIO(image_bytes))
             img_w, img_h = image.size
+            t_pil = (time.time() - t_pil_start) * 1000
         except Exception as e:
             print(f"Panorama detect: failed to load slice image at heading {slice_heading:.1f}°: {e}")
             continue
 
-        start_time = time.time()
+        t_yolo_start = time.time()
         yolo_results = model.predict(image, conf=request.confidence, verbose=False)
-        total_inference_ms += (time.time() - start_time) * 1000
+        t_yolo = (time.time() - t_yolo_start) * 1000
+        total_yolo_ms += t_yolo
+        yolo_speed = yolo_results[0].speed if yolo_results else {}
 
         # Run depth estimation once per slice (only if detections found)
         slice_has_dets = any(r.boxes is not None and len(r.boxes) > 0 for r in yolo_results)
         depth_tensor = None
+        t_depth = 0.0
         if slice_has_dets:
             try:
                 depth_start = time.time()
                 depth_result = depth_model(image)
                 depth_tensor = depth_result["predicted_depth"]  # torch tensor with metric depth
-                total_inference_ms += (time.time() - depth_start) * 1000
+                t_depth = (time.time() - depth_start) * 1000
+                total_depth_ms += t_depth
             except Exception as e:
                 print(f"Panorama detect: depth estimation failed for slice {slice_heading:.1f}°: {e}")
 
+        t_postproc_start = time.time()
         for r in yolo_results:
             if r.boxes is None:
                 continue
@@ -1058,16 +1086,25 @@ async def detect_panorama_impl(request: SahiRequest) -> SahiResponse:
                     size_correction=size_correction,
                 ))
 
+        t_postproc = (time.time() - t_postproc_start) * 1000
+        total_postproc_ms += t_postproc
+        print(f"  Slice {slice_heading:.1f}°: pil={t_pil:.0f}ms yolo={t_yolo:.0f}ms (preproc={yolo_speed.get('preprocess', 0):.0f}ms infer={yolo_speed.get('inference', 0):.0f}ms postproc={yolo_speed.get('postprocess', 0):.0f}ms) depth={t_depth:.0f}ms postproc={t_postproc:.0f}ms")
+
     print(f"Panorama detect: {len(all_angular_dets)} raw detections before NMS")
 
+    t_nms_start = time.time()
     # NMS to merge overlapping detections from adjacent slices
     merged = nms_angular(all_angular_dets, request.nms_iou_threshold)
+    t_nms = (time.time() - t_nms_start) * 1000
+
+    t_total = (time.time() - t_start_total) * 1000
 
     print(f"Panorama detect: {len(merged)} detections after NMS")
+    print(f"PROFILE /detect-panorama: fetch={t_fetch:.0f}ms yolo_total={total_yolo_ms:.0f}ms depth_total={total_depth_ms:.0f}ms postproc_total={total_postproc_ms:.0f}ms nms={t_nms:.0f}ms total={t_total:.0f}ms")
 
     return SahiResponse(
         detections=merged,
-        total_inference_time_ms=round(total_inference_ms, 1),
+        total_inference_time_ms=round(total_yolo_ms + total_depth_ms, 1),
         slices_count=num_slices,
     )
 
@@ -1112,7 +1149,7 @@ Your entire response must conform exactly to this JSON structure:
   "confidence_readable": "high" | "medium" | "low",
   "rules": [
     {
-      "category": "no_parking" | "no_standing" | "no_stopping" | "parking_allowed" | "loading_zone" | "permit_required",
+      "category": "no_parking" | "parking_allowed" | "loading_zone" | "permit_required",
       "time_limit_minutes": <integer or null>,
       "days": ["mon","tue","wed","thu","fri","sat","sun"] or null,
       "time_start": "HH:MM" or null,
