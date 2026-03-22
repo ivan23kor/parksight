@@ -1046,17 +1046,6 @@
               fillOpacity: 0.65,
             }).addTo(signMarkersLayer);
 
-            // Show OCR summary as permanent tooltip
-            const ocrLabel = buildOcrTooltipText(sign.ocrResult);
-            if (ocrLabel) {
-              signCircle.bindTooltip(ocrLabel, {
-                permanent: true,
-                direction: "top",
-                offset: [0, -8],
-                className: "ocr-tooltip",
-              });
-            }
-
             signCircle.bindPopup(createSignPreviewPopupHtml(sign), {
               maxWidth: 220,
             });
@@ -1155,24 +1144,6 @@
             });
           }
         }
-      }
-
-      function buildOcrTooltipText(ocrResult) {
-        if (!ocrResult?.is_parking_sign) return null;
-        const parts = [];
-        for (const rule of ocrResult.rules || []) {
-          let s = (rule.category || "").replace(/_/g, " ").toUpperCase();
-          if (rule.time_limit_minutes) s += ` ${rule.time_limit_minutes}min`;
-          if (rule.time_start && rule.time_end) s += ` ${rule.time_start}-${rule.time_end}`;
-          if (rule.days?.length) s += ` ${rule.days.map(d => d.slice(0, 3)).join(",")}`;
-          parts.push(s);
-        }
-        for (const tz of ocrResult.tow_zones || []) {
-          let s = "TOW ZONE";
-          if (tz.time_start && tz.time_end) s += ` ${tz.time_start}-${tz.time_end}`;
-          parts.push(s);
-        }
-        return parts.length ? parts.join("\n") : null;
       }
 
       function createSignPreviewPopupHtml(sign) {
@@ -1603,11 +1574,12 @@
         }
 
         // Initialize Leaflet map
-        map = L.map("map", { maxZoom: 22, minZoom: 2 }).setView([42.3615, -71.0921], 16);
+        map = L.map("map", { maxZoom: 23, minZoom: 2 }).setView([42.3615, -71.0921], 16);
 
-        // Add tile layer
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-          attribution: "© OpenStreetMap contributors",
+        // Add tile layer (Esri World Imagery supports zoom 23)
+        L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+          attribution: "© Esri",
+          maxZoom: 22,
         }).addTo(map);
 
         // Initialize layers
