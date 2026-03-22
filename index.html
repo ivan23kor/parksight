@@ -1680,12 +1680,12 @@
         }
 
         // Initialize Leaflet map
-        map = L.map("map", { maxZoom: 23, minZoom: 2 }).setView([42.3615, -71.0921], 16);
+        map = L.map("map", { maxZoom: 19, minZoom: 2 }).setView([42.3615, -71.0921], 16);
 
-        // Add tile layer (Esri World Imagery supports zoom 23)
-        L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-          attribution: "© Esri",
-          maxZoom: 22,
+        // Add tile layer (OpenStreetMap with street names)
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          attribution: "© OpenStreetMap contributors",
+          maxZoom: 19,
         }).addTo(map);
 
         // Initialize layers
