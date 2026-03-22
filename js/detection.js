@@ -982,6 +982,58 @@ function renderDepthOverlay(overlay, pov, fov, screenWidth, screenHeight) {
   // Debug distance rings
   renderDebugDistanceRings(overlay, pov, fov, screenWidth, screenHeight);
 }
+/**
+ * Draw OCR text label on panorama overlay for a detection.
+ * Shows rule categories and key info (time, limit) on multiple lines.
+ */
+function drawOcrTextOnOverlay(overlay, x, y, width, height, ocrResult) {
+  const SVG_NS = "http://www.w3.org/2000/svg";
+
+  if (!ocrResult?.is_parking_sign || !ocrResult.rules || ocrResult.rules.length === 0) {
+    return;
+  }
+
+  // Position text below bounding box
+  const textX = x + width / 2;
+  const textY = y + height + 12;
+
+  // Draw up to 3 rule lines
+  const lines = [];
+  for (let i = 0; i < Math.min(3, ocrResult.rules.length); i++) {
+    const rule = ocrResult.rules[i];
+    let text = rule.category.replace(/_/g, " ").toUpperCase();
+    if (rule.time_limit_minutes) text += ` ${rule.time_limit_minutes}m`;
+    lines.push(text);
+  }
+
+  if (ocrResult.tow_zones?.length > 0) {
+    lines[0] = "⚠️ TOW ZONE";
+  }
+
+  lines.forEach((line, idx) => {
+    // Create background rect for text readability
+    const bgRect = document.createElementNS(SVG_NS, "rect");
+    bgRect.setAttribute("x", textX - 50);
+    bgRect.setAttribute("y", textY + idx * 12 - 10);
+    bgRect.setAttribute("width", "100");
+    bgRect.setAttribute("height", "12");
+    bgRect.setAttribute("fill", "rgba(0,0,0,0.7)");
+    bgRect.setAttribute("rx", "2");
+    overlay.appendChild(bgRect);
+
+    // Create text element
+    const textEl = document.createElementNS(SVG_NS, "text");
+    textEl.setAttribute("x", textX);
+    textEl.setAttribute("y", textY + idx * 12);
+    textEl.setAttribute("fill", "#fff");
+    textEl.setAttribute("font-size", "11");
+    textEl.setAttribute("font-family", "Arial");
+    textEl.setAttribute("text-anchor", "middle");
+    textEl.setAttribute("font-weight", "bold");
+    textEl.textContent = line;
+    overlay.appendChild(textEl);
+  });
+}
 
 /**
  * Update SVG overlay with detection boxes.
@@ -1079,6 +1131,18 @@ function updateDetectionOverlay() {
     rect.addEventListener("mousedown", (e) => e.stopPropagation());
     rect.addEventListener("mouseup", (e) => e.stopPropagation());
     overlay.appendChild(rect);
+
+    // Draw OCR text if available
+    if (det.ocrResult?.is_parking_sign) {
+      drawOcrTextOnOverlay(
+        overlay,
+        screen.x,
+        screen.y,
+        screen.width,
+        screen.height,
+        det.ocrResult
+      );
+    }
 
     // Create label — show depth, physical size, aspect ratio
     const depthLabel = det.depthAnythingMeters
