@@ -3377,6 +3377,11 @@ function estimateSignLocation(
 function estimateAllSignLocations(cameraLat, cameraLng, options = null) {
   const results = currentDetections
     .map((det) => {
+      // Invalidate if OCR determined it's not a parking sign
+      if (det.ocrResult && det.ocrResult.is_parking_sign === false) {
+        return null;
+      }
+
       const estimate = estimateSignLocation(cameraLat, cameraLng, det);
       if (!estimate) return null;
 
