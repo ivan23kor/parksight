@@ -2841,7 +2841,8 @@ function inferDetectionSide(signHeading, trafficBearing, fallbackSide = "right")
  *   Left-side sign:  observer's left = against traffic (-1)
  */
 function arrowToAlongStreetDirections(arrowDirection, side) {
-  if (!arrowDirection || arrowDirection === "none" || arrowDirection === "both") return [+1, -1];
+  // Default to with-traffic (+1) for ambiguous arrow directions to avoid duplicate lines
+  if (!arrowDirection || arrowDirection === "none" || arrowDirection === "both") return [+1];
   if (side === "right") {
     return arrowDirection === "left" ? [+1] : [-1];
   }
