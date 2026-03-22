@@ -986,16 +986,12 @@ function renderDepthOverlay(overlay, pov, fov, screenWidth, screenHeight) {
  * Draw OCR text label on panorama overlay for a detection.
  * Shows rule categories and key info (time, limit) on multiple lines.
  */
-function drawOcrTextOnOverlay(overlay, x, y, width, height, ocrResult) {
+function drawOcrTextOnOverlay(overlay, x, y, width, height, ocrResult, overlayHeight) {
   const SVG_NS = "http://www.w3.org/2000/svg";
 
   if (!ocrResult?.is_parking_sign || !ocrResult.rules || ocrResult.rules.length === 0) {
     return;
   }
-
-  // Position text below bounding box
-  const textX = x + width / 2;
-  const textY = y + height + 12;
 
   // Draw up to 3 rule lines
   const lines = [];
@@ -1010,21 +1006,32 @@ function drawOcrTextOnOverlay(overlay, x, y, width, height, ocrResult) {
     lines[0] = "⚠️ TOW ZONE";
   }
 
+  const LINE_HEIGHT = 14;
+  const totalTextHeight = lines.length * LINE_HEIGHT;
+  const textX = x + width / 2;
+
+  // Position below box; if off-screen, try above box
+  let textY = y + height + LINE_HEIGHT;
+  if (textY + totalTextHeight > overlayHeight) {
+    textY = y - totalTextHeight;
+  }
+  // Skip if no room above either
+  if (textY < 0) return;
+
   lines.forEach((line, idx) => {
-    // Create background rect for text readability
+    // Background rect for readability
     const bgRect = document.createElementNS(SVG_NS, "rect");
-    bgRect.setAttribute("x", textX - 50);
-    bgRect.setAttribute("y", textY + idx * 12 - 10);
-    bgRect.setAttribute("width", "100");
-    bgRect.setAttribute("height", "12");
+    bgRect.setAttribute("x", textX - 55);
+    bgRect.setAttribute("y", textY + idx * LINE_HEIGHT - LINE_HEIGHT + 2);
+    bgRect.setAttribute("width", "110");
+    bgRect.setAttribute("height", String(LINE_HEIGHT));
     bgRect.setAttribute("fill", "rgba(0,0,0,0.7)");
     bgRect.setAttribute("rx", "2");
     overlay.appendChild(bgRect);
 
-    // Create text element
     const textEl = document.createElementNS(SVG_NS, "text");
     textEl.setAttribute("x", textX);
-    textEl.setAttribute("y", textY + idx * 12);
+    textEl.setAttribute("y", textY + idx * LINE_HEIGHT);
     textEl.setAttribute("fill", "#fff");
     textEl.setAttribute("font-size", "11");
     textEl.setAttribute("font-family", "Arial");
@@ -1140,7 +1147,8 @@ function updateDetectionOverlay() {
         screen.y,
         screen.width,
         screen.height,
-        det.ocrResult
+        det.ocrResult,
+        height
       );
     }
 
@@ -1807,13 +1815,13 @@ async function runOcrOnAllDetections() {
 
     if (!cropResp.ok) {
       console.warn("OCR: failed to crop sign cluster");
-      return;
+      throw new Error("Failed to crop sign cluster");
     }
 
     const cropData = await cropResp.json();
     if (!cropData.image_base64) {
       console.warn("OCR: no image for sign cluster");
-      return;
+      throw new Error("No image returned for sign cluster");
     }
 
     const ocrResp = await fetch(`${apiUrl}/ocr-sign`, {
@@ -1824,7 +1832,7 @@ async function runOcrOnAllDetections() {
 
     if (!ocrResp.ok) {
       console.warn("OCR: failed for sign cluster");
-      return;
+      throw new Error("OCR request failed");
     }
 
     const ocrResult = await ocrResp.json();
@@ -1837,6 +1845,12 @@ async function runOcrOnAllDetections() {
     });
   } catch (err) {
     console.warn("OCR error:", err);
+    const errorMsg = `OCR failed: ${err.message}`;
+    currentDetections.forEach((det, i) => {
+      det.ocrResult = { is_parking_sign: false, rejection_reason: errorMsg };
+      det.ocrError = errorMsg;
+      ocrResults.set(i, det.ocrResult);
+    });
   }
 
   updateDetectionOverlay();
