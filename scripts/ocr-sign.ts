@@ -3,14 +3,14 @@
  * Parking Sign OCR Tool
  *
  * Extracts structured parking regulation data from sign images using
- * Z AI GLM-4.6v-flash vision model.
+ * amp-haiku via CLI proxy.
  *
  * Usage:
  *   bun run scripts/ocr-sign.ts <image_path>
  *   bun run scripts/ocr-sign.ts  # Uses latest screenshot
  *
- * Environment:
- *   Z_AI_API_KEY - API key for Z AI (required)
+ * Requires:
+ *   CLI proxy running on localhost:8317
  *
  * Output:
  *   JSON object with parking rules extracted from the sign:
@@ -98,11 +98,7 @@ Your entire response must conform exactly to this JSON structure:
 - Do NOT add any text, commentary, or formatting outside the JSON object.`;
 
 async function main() {
-  const apiKey = process.env.Z_AI_API_KEY;
-  if (!apiKey) {
-    console.error("Error: Z_AI_API_KEY environment variable not set");
-    process.exit(1);
-  }
+  const apiKey = "sk-40b1b38c2d991296dfa3cad830829dfc2e9f7764eab400a2";
 
   // Use provided path or find latest screenshot
   let screenshotPath = process.argv[2];
@@ -141,17 +137,18 @@ async function main() {
     .png({ quality: 80 })
     .toBuffer();
   const base64Image = resizedBuffer.toString("base64");
-  const imageDataUrl = `data:image/png;base64,${base64Image}`;
+  // Detect MIME from raw bytes (sharp outputs PNG here, but be safe)
+  const mime = imageBuffer[0] === 0x89 ? "image/png" : "image/jpeg";
+  const imageDataUrl = `data:${mime};base64,${base64Image}`;
 
-  // Call z.ai Coding Plan API with GLM-4.6v-flash (vision model)
-  const response = await fetch("https://api.z.ai/api/coding/paas/v4/chat/completions", {
+  const response = await fetch("http://localhost:8317/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Authorization": `Bearer ${apiKey}`
     },
     body: JSON.stringify({
-      model: "glm-4.6v-flash",
+      model: "amp-haiku",
       messages: [
         {
           role: "user",

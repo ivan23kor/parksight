@@ -1337,6 +1337,7 @@ function handleMarkerKeyboard(event) {
  */
 function clearDetections() {
   currentDetections = [];
+  ocrResults.clear();
   updateDetectionOverlay();
 
   const statusEl = document.getElementById("detectionStatus");
@@ -1705,75 +1706,73 @@ function showOcrModal(ocrResult, x, y) {
 }
 
 /**
- * Run OCR on all detections after YOLO finishes.
+ * Run OCR once on the entire sign cluster after YOLO finishes.
+ * All detections in a panorama belong to one physical sign post,
+ * so we merge them into one bounding box, crop once, and OCR once.
  */
 async function runOcrOnAllDetections() {
   const apiUrl = window.DETECTION_CONFIG?.API_URL;
   if (!apiUrl || !detectionPanorama || currentDetections.length === 0) return;
 
+  ocrResults.clear();
+
   const panoId = detectionPanorama.getPano();
   if (!panoId) return;
 
   const statusEl = document.getElementById("status") || document.getElementById("detectionStatus");
-  if (statusEl) statusEl.textContent = `Running OCR on ${currentDetections.length} sign(s)...`;
+  if (statusEl) statusEl.textContent = `Running OCR on sign cluster...`;
 
-  // Process detections in parallel (max 3 at a time)
-  const batchSize = 3;
-  for (let i = 0; i < currentDetections.length; i += batchSize) {
-    const batch = currentDetections.slice(i, i + batchSize);
-    await Promise.all(batch.map(async (det, batchIdx) => {
-      const detIdx = i + batchIdx;
-      try {
-        // Get cropped sign image
-        const cropPlan = await buildDetectionCropPlan(det, panoId, null);
-        const { session, requestBody } = cropPlan;
+  try {
+    // Merge all detections into one bounding box covering the full sign post
+    const mergedDet = mergeAngularDetections(currentDetections);
 
-        // Fetch tiles and get base64 image
-        const cropResp = await fetch(`${apiUrl}/crop-sign-tiles`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...requestBody, include_image: true, save: false }),
-        });
+    const cropPlan = await buildDetectionCropPlan(mergedDet, panoId, null);
 
-        if (!cropResp.ok) {
-          console.warn(`OCR: failed to crop detection ${detIdx}`);
-          return;
-        }
+    const cropResp = await fetch(`${apiUrl}/crop-sign-tiles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...cropPlan.requestBody, include_image: true, save: false }),
+    });
 
-        const cropData = await cropResp.json();
-        if (!cropData.image_base64) {
-          console.warn(`OCR: no image for detection ${detIdx}`);
-          return;
-        }
+    if (!cropResp.ok) {
+      console.warn("OCR: failed to crop sign cluster");
+      return;
+    }
 
-        // Call OCR endpoint
-        const ocrResp = await fetch(`${apiUrl}/ocr-sign`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ image_base64: cropData.image_base64 }),
-        });
+    const cropData = await cropResp.json();
+    if (!cropData.image_base64) {
+      console.warn("OCR: no image for sign cluster");
+      return;
+    }
 
-        if (!ocrResp.ok) {
-          console.warn(`OCR: failed for detection ${detIdx}`);
-          return;
-        }
+    const ocrResp = await fetch(`${apiUrl}/ocr-sign`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image_base64: cropData.image_base64 }),
+    });
 
-        const ocrResult = await ocrResp.json();
-        ocrResults.set(detIdx, ocrResult);
-        det.ocrResult = ocrResult; // Store on detection object
+    if (!ocrResp.ok) {
+      console.warn("OCR: failed for sign cluster");
+      return;
+    }
 
-        console.log(`OCR detection ${detIdx}:`, ocrResult);
-      } catch (err) {
-        console.warn(`OCR error for detection ${detIdx}:`, err);
-      }
-    }));
+    const ocrResult = await ocrResp.json();
+    console.log("OCR cluster result:", ocrResult);
+
+    // Store same result on all detections so any bbox click shows it
+    currentDetections.forEach((det, i) => {
+      ocrResults.set(i, ocrResult);
+      det.ocrResult = ocrResult;
+    });
+  } catch (err) {
+    console.warn("OCR error:", err);
   }
 
   updateDetectionOverlay();
 
   if (statusEl) {
     const ocrCount = ocrResults.size;
-    statusEl.textContent = `Found ${currentDetections.length} sign(s). OCR: ${ocrCount}/${currentDetections.length}. Click for details.`;
+    statusEl.textContent = `Found ${currentDetections.length} sign(s). OCR: ${ocrCount > 0 ? "done" : "failed"}.`;
   }
 }
 

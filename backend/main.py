@@ -1172,27 +1172,24 @@ async def ocr_sign(request: OcrSignRequest):
     Takes a base64-encoded cropped sign image and returns structured
     parking regulation data including rules, time limits, and payment info.
     """
-    import os
-
-    api_key = os.environ.get("Z_AI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="Z_AI_API_KEY not configured")
-
-    # Build data URL from base64
-    image_data_url = f"data:image/jpeg;base64,{request.image_base64}"
+    # Detect image format from base64 header bytes
+    import base64 as _b64
+    raw = _b64.b64decode(request.image_base64[:16])
+    mime = "image/png" if raw[:4] == b'\x89PNG' else "image/jpeg"
+    image_data_url = f"data:{mime};base64,{request.image_base64}"
 
     start_time = time.time()
 
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.post(
-                "https://api.z.ai/api/coding/paas/v4/chat/completions",
+                "http://localhost:8317/v1/chat/completions",
                 headers={
                     "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}"
+                    "Authorization": "Bearer sk-40b1b38c2d991296dfa3cad830829dfc2e9f7764eab400a2"
                 },
                 json={
-                    "model": "glm-4.6v-flash",
+                    "model": "amp-haiku",
                     "messages": [
                         {
                             "role": "user",
@@ -1214,14 +1211,14 @@ async def ocr_sign(request: OcrSignRequest):
             )
             resp.raise_for_status()
         except httpx.HTTPError as e:
-            raise HTTPException(status_code=502, detail=f"Z AI API error: {e}")
+            raise HTTPException(status_code=502, detail=f"OCR API error: {e}")
 
     inference_time_ms = (time.time() - start_time) * 1000
 
     data = resp.json()
 
     if not data.get("choices") or not data["choices"][0].get("message", {}).get("content"):
-        raise HTTPException(status_code=502, detail="Empty response from Z AI")
+        raise HTTPException(status_code=502, detail="Empty response from OCR API")
 
     content = data["choices"][0]["message"]["content"].strip()
 
