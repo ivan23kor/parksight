@@ -1083,6 +1083,10 @@
           }
         }
 
+        // Track rendered curves to avoid duplicates (same sign location + rule + direction)
+        const renderedKeys = new Set();
+        const SIGN_LOCATION_PRECISION = 4; // ~11m precision for dedup
+
         for (const detection of data?.detections || []) {
           const wayGeometry = detection.wayGeometry;
 
@@ -1091,6 +1095,7 @@
             if (!ocrResult?.is_parking_sign) continue;
 
             const signWayGeo = wayGeometry || sign.wayGeometry;
+            const signLocKey = `${sign.lat.toFixed(SIGN_LOCATION_PRECISION)},${sign.lng.toFixed(SIGN_LOCATION_PRECISION)}`;
 
             // Draw rule curves
             (ocrResult.rules || []).forEach((rule, ruleIndex) => {
@@ -1098,6 +1103,10 @@
               const directions = arrowToAlongStreetDirections(rule.arrow_direction, sign.side);
 
               for (const dir of directions) {
+                const curveKey = `${signLocKey}|${rule.category}|${dir}`;
+                if (renderedKeys.has(curveKey)) continue;
+                renderedKeys.add(curveKey);
+
                 const maxDist = findDistanceToNextSign(sign, dir, allSigns, signWayGeo);
                 const latLngs = buildRuleCurveLatLngs(sign, signWayGeo, dir, ruleIndex, maxDist);
                 if (!latLngs?.length) continue;
@@ -1112,6 +1121,10 @@
               const directions = arrowToAlongStreetDirections(tz.arrow_direction, sign.side);
               const stackIndex = (ocrResult.rules || []).length + tzIndex;
               for (const dir of directions) {
+                const curveKey = `${signLocKey}|tow_zone|${dir}`;
+                if (renderedKeys.has(curveKey)) continue;
+                renderedKeys.add(curveKey);
+
                 const maxDist = findDistanceToNextSign(sign, dir, allSigns, signWayGeo);
                 const latLngs = buildRuleCurveLatLngs(sign, signWayGeo, dir, stackIndex, maxDist);
                 if (!latLngs?.length) continue;
