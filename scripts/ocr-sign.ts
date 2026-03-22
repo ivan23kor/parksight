@@ -3,7 +3,7 @@
  * Parking Sign OCR Tool
  *
  * Extracts structured parking regulation data from sign images using
- * amp-haiku via CLI proxy.
+ * gemini-3-flash via CLI proxy.
  *
  * Usage:
  *   bun run scripts/ocr-sign.ts <image_path>
@@ -148,7 +148,7 @@ async function main() {
       "Authorization": `Bearer ${apiKey}`
     },
     body: JSON.stringify({
-      model: "amp-haiku",
+      model: "gemini-3-flash",
       messages: [
         {
           role: "user",

@@ -23,6 +23,20 @@ let debugMapLayer = null; // Leaflet layer group for debug overlays on 2D map
 let ocrModalEl = null;
 let ocrResults = new Map(); // Cache OCR results by detection index
 
+// Rule curve constants
+const RULE_CATEGORY_COLORS = {
+  no_parking: "#ef4444",
+  no_standing: "#f97316",
+  no_stopping: "#dc2626",
+  parking_allowed: "#22c55e",
+  loading_zone: "#8b5cf6",
+  permit_required: "#f59e0b",
+};
+const TOW_ZONE_COLOR = "#dc2626";
+const RULE_CURVE_SAMPLE_STEP_METERS = 3;
+const RULE_CURVE_DEFAULT_LENGTH_METERS = 50;
+const RULE_CURVE_STACK_OFFSET_METERS = 0.8;
+
 
 /**
  * Calculate FOV from Street View zoom level.
@@ -1614,14 +1628,7 @@ function showOcrModal(ocrResult, x, y) {
       <div style="color: #9ca3af; font-size: 11px; margin-top: 4px;">${ocrResult?.rejection_reason || "Unknown"}</div>`;
   } else {
     const rulesHtml = (ocrResult.rules || []).map((rule, i) => {
-      const categoryColor = {
-        no_parking: "#ef4444",
-        no_standing: "#f97316",
-        no_stopping: "#dc2626",
-        parking_allowed: "#22c55e",
-        loading_zone: "#8b5cf6",
-        permit_required: "#f59e0b",
-      }[rule.category] || "#9ca3af";
+      const categoryColor = RULE_CATEGORY_COLORS[rule.category] || "#9ca3af";
 
       const daysStr = rule.days ? rule.days.map(d => d.toUpperCase()).join(", ") : "Any day";
       const timeStr = rule.time_start && rule.time_end
@@ -1769,6 +1776,7 @@ async function runOcrOnAllDetections() {
   }
 
   updateDetectionOverlay();
+  window.dispatchEvent(new Event("ocr-complete"));
 
   if (statusEl) {
     const ocrCount = ocrResults.size;
@@ -2748,6 +2756,22 @@ function inferDetectionSide(signHeading, trafficBearing, fallbackSide = "right")
   return Math.sin((delta * Math.PI) / 180) >= 0 ? "right" : "left";
 }
 
+/**
+ * Map arrow_direction from sign perspective to along-street directions.
+ * Returns array of +1 (with traffic) and/or -1 (against traffic).
+ *
+ * Sign faces oncoming traffic. Observer facing sign:
+ *   Right-side sign: observer's left = with traffic (+1)
+ *   Left-side sign:  observer's left = against traffic (-1)
+ */
+function arrowToAlongStreetDirections(arrowDirection, side) {
+  if (!arrowDirection || arrowDirection === "none" || arrowDirection === "both") return [+1, -1];
+  if (side === "right") {
+    return arrowDirection === "left" ? [+1] : [-1];
+  }
+  return arrowDirection === "left" ? [-1] : [+1];
+}
+
 function parseLaneCount(lanes) {
   if (typeof lanes === "string") {
     return parseFloat(lanes.split(";")[0]);
@@ -3543,6 +3567,119 @@ function renderDebugDecompositionLines(signLocations, cameraLat, cameraLng) {
       { color: "#ffffff", weight: 1, dashArray: "2,4", opacity: 0.4, interactive: false },
     ).addTo(debugMapLayer);
   }
+}
+
+/**
+ * Find distance to the next detected sign on the same side and same street.
+ * Returns distance in meters, or RULE_CURVE_DEFAULT_LENGTH_METERS if none found.
+ *
+ * @param {Object} sign - Current sign with lat, lng, side, wayGeometry
+ * @param {number} direction - +1 (with traffic) or -1 (against traffic)
+ * @param {Array} allSigns - All signs across all detections (each with wayGeometry attached)
+ * @param {Array} wayGeometry - The wayGeometry for the current sign's street
+ */
+function findDistanceToNextSign(sign, direction, allSigns, wayGeometry) {
+  if (!hasWayGeometry(wayGeometry) || !sign.side) {
+    return RULE_CURVE_DEFAULT_LENGTH_METERS;
+  }
+
+  const signAnchor = projectPointOntoWayGeometry(sign.lat, sign.lng, wayGeometry, sign.segmentIndex ?? null);
+  if (!signAnchor) return RULE_CURVE_DEFAULT_LENGTH_METERS;
+
+  // Use first node of wayGeometry as street identity
+  const streetId = `${wayGeometry[0].lat},${getWayNodeLng(wayGeometry[0])}`;
+
+  let nearest = RULE_CURVE_DEFAULT_LENGTH_METERS;
+
+  for (const candidate of allSigns) {
+    if (candidate === sign) continue;
+    if (candidate.side !== sign.side) continue;
+
+    const cWay = candidate.wayGeometry;
+    if (!hasWayGeometry(cWay)) continue;
+
+    const cStreetId = `${cWay[0].lat},${getWayNodeLng(cWay[0])}`;
+    if (cStreetId !== streetId) continue;
+
+    const cAnchor = projectPointOntoWayGeometry(candidate.lat, candidate.lng, wayGeometry, candidate.segmentIndex ?? null);
+    if (!cAnchor) continue;
+
+    // Compute signed along-street distance from sign to candidate
+    // Walk from signAnchor to cAnchor and measure
+    const dist = haversineDistanceMeters(signAnchor.lat, signAnchor.lng, cAnchor.lat, cAnchor.lng);
+    if (dist < 1) continue; // Same sign
+
+    // Determine if candidate is in the requested direction
+    // Walk a small distance in the requested direction and check if candidate is closer
+    const probe = walkWayGeometryByDistance(wayGeometry, signAnchor, direction * 1);
+    if (!probe) continue;
+
+    const distFromProbe = haversineDistanceMeters(probe.lat, probe.lng, cAnchor.lat, cAnchor.lng);
+    const isInDirection = distFromProbe < dist;
+
+    if (isInDirection && dist < nearest) {
+      nearest = dist;
+    }
+  }
+
+  return nearest;
+}
+
+/**
+ * Build an array of [lat, lng] points forming a curve parallel to the street,
+ * offset to the sign's side (curb line), for rendering a parking rule on the 2D map.
+ *
+ * @param {Object} sign - Projected sign with lat, lng, side, curbOffsetMeters, trafficBearing, segmentIndex
+ * @param {Array} wayGeometry - Street geometry [{lat, lon/lng}, ...]
+ * @param {number} direction - +1 (with traffic) or -1 (against traffic)
+ * @param {number} ruleIndex - Index for perpendicular stacking offset
+ * @param {number} maxDistanceMeters - Max curve length from sign
+ * @returns {Array|null} Array of [lat, lng] pairs for Leaflet polyline
+ */
+function buildRuleCurveLatLngs(sign, wayGeometry, direction, ruleIndex, maxDistanceMeters) {
+  const curbOffset = (sign.curbOffsetMeters || FIXED_SIGN_CENTERLINE_OFFSET_METERS)
+    + ruleIndex * RULE_CURVE_STACK_OFFSET_METERS;
+  const side = sign.side || "right";
+
+  // Fallback: straight line using trafficBearing
+  if (!hasWayGeometry(wayGeometry)) {
+    if (!Number.isFinite(sign.trafficBearing)) return null;
+
+    const bearing = direction > 0 ? sign.trafficBearing : normalizeBearingDegrees(sign.trafficBearing + 180);
+    const lateralBearing = side === "right"
+      ? normalizeBearingDegrees(sign.trafficBearing + 90)
+      : normalizeBearingDegrees(sign.trafficBearing - 90);
+
+    const points = [];
+    for (let d = 0; d <= maxDistanceMeters; d += RULE_CURVE_SAMPLE_STEP_METERS) {
+      const centerPt = projectLatLng(sign.lat, sign.lng, d, bearing);
+      const offsetPt = projectLatLng(centerPt.lat, centerPt.lng, curbOffset, lateralBearing);
+      points.push([offsetPt.lat, offsetPt.lng]);
+    }
+    return points.length >= 2 ? points : null;
+  }
+
+  // Project sign onto wayGeometry centerline
+  const anchor = projectPointOntoWayGeometry(sign.lat, sign.lng, wayGeometry, sign.segmentIndex ?? null);
+  if (!anchor) return null;
+
+  const points = [];
+  for (let d = 0; d <= maxDistanceMeters; d += RULE_CURVE_SAMPLE_STEP_METERS) {
+    const walked = walkWayGeometryByDistance(wayGeometry, anchor, direction * d);
+    if (!walked) continue;
+
+    const segBearing = getWaySegmentBearing(wayGeometry, walked.segmentIndex, sign.trafficBearing);
+    if (!Number.isFinite(segBearing)) continue;
+
+    const lateralBearing = side === "right"
+      ? normalizeBearingDegrees(segBearing + 90)
+      : normalizeBearingDegrees(segBearing - 90);
+
+    const offsetPt = projectLatLng(walked.lat, walked.lng, curbOffset, lateralBearing);
+    points.push([offsetPt.lat, offsetPt.lng]);
+  }
+
+  return points.length >= 2 ? points : null;
 }
 
 /**

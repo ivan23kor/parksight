@@ -436,6 +436,7 @@
       // Global state
       let map;
       let signMarkersLayer;
+      let ruleCurvesLayer;
       let panoramaCaptureSpotsLayer;
       let isPanoramaBlackoutEnabled = false;
       let panoramaCaptureSpotsSyncToken = 0;
@@ -554,6 +555,7 @@
         latestRenderedSignMapData = normalizeSignMapStore(null);
         localStorage.removeItem(SIGN_MAP_STORAGE_KEY);
         signMarkersLayer.clearLayers();
+        ruleCurvesLayer.clearLayers();
       }
 
       function clearPanoramaCaptureSpots() {
@@ -1048,6 +1050,89 @@
         if (boundsPoints.length > 0) {
           map.fitBounds(boundsPoints, { padding: [60, 60], maxZoom: 19 });
         }
+
+        renderRuleCurves(data);
+      }
+
+      function buildRulePopupHtml(rule, isTowZone = false) {
+        const daysStr = rule.days ? rule.days.map(d => d.toUpperCase()).join(", ") : "Any day";
+        const timeStr = rule.time_start && rule.time_end
+          ? `${rule.time_start}–${rule.time_end}`
+          : "Any time";
+
+        if (isTowZone) {
+          return `<div style="padding:4px;">
+            <div style="font-weight:600; color:${TOW_ZONE_COLOR}; text-transform:uppercase; font-size:11px;">TOW ZONE</div>
+            <div style="font-size:12px; margin-top:4px;">${daysStr}<br/>${timeStr}</div>
+            ${rule.additional_text ? `<div style="color:#6b7280; font-size:11px; margin-top:2px;">${rule.additional_text}</div>` : ""}
+          </div>`;
+        }
+
+        const color = RULE_CATEGORY_COLORS[rule.category] || "#9ca3af";
+        const limitStr = rule.time_limit_minutes ? `${rule.time_limit_minutes}min` : "";
+        const payStr = rule.payment_required === true ? " (paid)" : rule.payment_required === false ? " (free)" : "";
+
+        return `<div style="padding:4px; border-left:3px solid ${color};">
+          <div style="font-weight:600; color:${color}; text-transform:uppercase; font-size:11px;">${rule.category.replace(/_/g, " ")}</div>
+          <div style="font-size:12px; margin-top:4px;">${daysStr}<br/>${timeStr} ${limitStr}${payStr}</div>
+          ${rule.additional_text ? `<div style="color:#6b7280; font-size:11px; margin-top:2px;">${rule.additional_text}</div>` : ""}
+        </div>`;
+      }
+
+      function renderRuleCurves(data) {
+        ruleCurvesLayer.clearLayers();
+
+        // Collect all signs across all detections for distance-to-next-sign lookup
+        const allSigns = [];
+        for (const detection of data?.detections || []) {
+          const wayGeo = detection.wayGeometry;
+          for (const sign of detection.signs || []) {
+            allSigns.push({ ...sign, wayGeometry: wayGeo || sign.wayGeometry });
+          }
+        }
+
+        for (const detection of data?.detections || []) {
+          const wayGeometry = detection.wayGeometry;
+
+          for (const sign of detection.signs || []) {
+            const ocrResult = sign.ocrResult;
+            if (!ocrResult?.is_parking_sign) continue;
+
+            const signWayGeo = wayGeometry || sign.wayGeometry;
+
+            // Draw rule curves
+            (ocrResult.rules || []).forEach((rule, ruleIndex) => {
+              const color = RULE_CATEGORY_COLORS[rule.category] || "#9ca3af";
+              const directions = arrowToAlongStreetDirections(rule.arrow_direction, sign.side);
+
+              for (const dir of directions) {
+                const maxDist = findDistanceToNextSign(sign, dir, allSigns, signWayGeo);
+                const latLngs = buildRuleCurveLatLngs(sign, signWayGeo, dir, ruleIndex, maxDist);
+                if (!latLngs?.length) continue;
+                L.polyline(latLngs, { color, weight: 4, opacity: 0.7 })
+                  .bindPopup(buildRulePopupHtml(rule))
+                  .addTo(ruleCurvesLayer);
+              }
+            });
+
+            // Draw tow zone curves
+            (ocrResult.tow_zones || []).forEach((tz, tzIndex) => {
+              const directions = arrowToAlongStreetDirections(tz.arrow_direction, sign.side);
+              const stackIndex = (ocrResult.rules || []).length + tzIndex;
+              for (const dir of directions) {
+                const maxDist = findDistanceToNextSign(sign, dir, allSigns, signWayGeo);
+                const latLngs = buildRuleCurveLatLngs(sign, signWayGeo, dir, stackIndex, maxDist);
+                if (!latLngs?.length) continue;
+                L.polyline(latLngs, {
+                  color: TOW_ZONE_COLOR, weight: 4, opacity: 0.7,
+                  dashArray: "8 6",
+                })
+                  .bindPopup(buildRulePopupHtml(tz, true))
+                  .addTo(ruleCurvesLayer);
+              }
+            });
+          }
+        }
       }
 
       function createSignPreviewPopupHtml(sign) {
@@ -1487,6 +1572,7 @@
 
         // Initialize layers
         signMarkersLayer = L.layerGroup().addTo(map);
+        ruleCurvesLayer = L.layerGroup().addTo(map);
         panoramaCaptureSpotsLayer = L.layerGroup().addTo(map);
         debugMapLayer = L.layerGroup().addTo(map);
 
@@ -1505,6 +1591,28 @@
           if (event.key === SIGN_MAP_STORAGE_KEY) {
             renderSignMapData(getLatestSignMapData());
           }
+        });
+
+        window.addEventListener("ocr-complete", () => {
+          // Attach OCR results from currentDetections to the persisted sign map data
+          if (!currentDetections.length || !currentDetections[0]?.ocrResult) return;
+          const ocrResult = currentDetections[0].ocrResult;
+
+          const panoId = typeof detectionPanorama?.getPano === "function"
+            ? detectionPanorama.getPano()
+            : null;
+          if (!panoId) return;
+
+          const store = getLatestSignMapData();
+          const detection = store.detections.find(d => d.panoId === panoId);
+          if (!detection?.signs?.length) return;
+
+          for (const sign of detection.signs) {
+            sign.ocrResult = ocrResult;
+          }
+
+          const updatedStore = appendSignMapDetection(detection);
+          renderSignMapData(updatedStore);
         });
 
 

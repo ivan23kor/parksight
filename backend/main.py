@@ -1167,7 +1167,7 @@ class OcrSignResponse(BaseModel):
 @app.post("/ocr-sign", response_model=OcrSignResponse)
 async def ocr_sign(request: OcrSignRequest):
     """
-    Parse parking sign text using vision LLM (Z AI GLM-4.6v-flash).
+    Parse parking sign text using vision LLM (gemini-3-flash).
 
     Takes a base64-encoded cropped sign image and returns structured
     parking regulation data including rules, time limits, and payment info.
@@ -1189,7 +1189,7 @@ async def ocr_sign(request: OcrSignRequest):
                     "Authorization": f"Bearer {os.environ.get('CLI_PROXY_API_KEY')}"
                 },
                 json={
-                    "model": "amp-haiku",
+                    "model": "gemini-3-flash",
                     "messages": [
                         {
                             "role": "user",
