@@ -1071,6 +1071,42 @@
         </div>`;
       }
 
+      const RULE_PRECEDENCE = { loading_zone: 4, permit_required: 3, no_parking: 2, parking_allowed: 1 };
+
+      /**
+       * Select the highest-precedence rule that applies to a given arrow direction.
+       * @param {Array} rules - OCR rules array
+       * @param {Array} towZones - OCR tow_zones array
+       * @param {string} targetArrowDir - "left" or "right"
+       * @returns {Object|null} - Winning rule with {rule, isTowZone, ruleIndex} or null
+       */
+      function selectWinningRuleForArrowDirection(rules, towZones, targetArrowDir) {
+        const candidates = [];
+
+        // Collect rules that apply to this arrow direction
+        (rules || []).forEach((rule, idx) => {
+          const arrowDir = rule.arrow_direction;
+          // Rule applies if arrow matches target, or arrow is "both"/"none"/undefined
+          if (arrowDir === targetArrowDir || arrowDir === "both" || !arrowDir || arrowDir === "none") {
+            candidates.push({ rule, isTowZone: false, ruleIndex: idx, precedence: RULE_PRECEDENCE[rule.category] || 0 });
+          }
+        });
+
+        // Collect tow zones that apply to this arrow direction (precedence = 2, same as no_parking)
+        (towZones || []).forEach((tz, idx) => {
+          const arrowDir = tz.arrow_direction;
+          if (arrowDir === targetArrowDir || arrowDir === "both" || !arrowDir || arrowDir === "none") {
+            candidates.push({ rule: tz, isTowZone: true, ruleIndex: idx, precedence: 2 });
+          }
+        });
+
+        if (candidates.length === 0) return null;
+
+        // Return highest-precedence candidate
+        candidates.sort((a, b) => b.precedence - a.precedence);
+        return candidates[0];
+      }
+
       function renderRuleCurves(data) {
         ruleCurvesLayer.clearLayers();
 
@@ -1083,7 +1119,7 @@
           }
         }
 
-        // Track rendered curves to avoid duplicates (same sign location + rule + direction)
+        // Track rendered curves to avoid duplicates (same sign location + direction)
         const renderedKeys = new Set();
         const SIGN_LOCATION_PRECISION = 4; // ~11m precision for dedup
 
@@ -1097,42 +1133,31 @@
             const signWayGeo = wayGeometry || sign.wayGeometry;
             const signLocKey = `${sign.lat.toFixed(SIGN_LOCATION_PRECISION)},${sign.lng.toFixed(SIGN_LOCATION_PRECISION)}`;
 
-            // Draw rule curves
-            (ocrResult.rules || []).forEach((rule, ruleIndex) => {
-              const color = RULE_CATEGORY_COLORS[rule.category] || "#9ca3af";
-              const directions = arrowToAlongStreetDirections(rule.arrow_direction, sign.side);
+            // Select winning rule for each arrow direction (left/right)
+            const leftWinner = selectWinningRuleForArrowDirection(ocrResult.rules, ocrResult.tow_zones, "left");
+            const rightWinner = selectWinningRuleForArrowDirection(ocrResult.rules, ocrResult.tow_zones, "right");
 
+            // Render at most one line per direction
+            [leftWinner, rightWinner].forEach((winner, arrowIdx) => {
+              if (!winner) return;
+
+              const arrowDir = arrowIdx === 0 ? "left" : "right";
+              const curveKey = `${signLocKey}|${arrowDir}`;
+              if (renderedKeys.has(curveKey)) return;
+              renderedKeys.add(curveKey);
+
+              const directions = arrowToAlongStreetDirections(arrowDir, sign.side);
               for (const dir of directions) {
-                const curveKey = `${signLocKey}|${rule.category}|${dir}`;
-                if (renderedKeys.has(curveKey)) continue;
-                renderedKeys.add(curveKey);
-
                 const maxDist = findDistanceToNextSign(sign, dir, allSigns, signWayGeo);
-                const latLngs = buildRuleCurveLatLngs(sign, signWayGeo, dir, ruleIndex, maxDist);
+                const latLngs = buildRuleCurveLatLngs(sign, signWayGeo, dir, winner.ruleIndex, maxDist);
                 if (!latLngs?.length) continue;
-                L.polyline(latLngs, { color, weight: 4, opacity: 0.7 })
-                  .bindPopup(buildRulePopupHtml(rule))
-                  .addTo(ruleCurvesLayer);
-              }
-            });
 
-            // Draw tow zone curves
-            (ocrResult.tow_zones || []).forEach((tz, tzIndex) => {
-              const directions = arrowToAlongStreetDirections(tz.arrow_direction, sign.side);
-              const stackIndex = (ocrResult.rules || []).length + tzIndex;
-              for (const dir of directions) {
-                const curveKey = `${signLocKey}|tow_zone|${dir}`;
-                if (renderedKeys.has(curveKey)) continue;
-                renderedKeys.add(curveKey);
+                const color = winner.isTowZone ? TOW_ZONE_COLOR : (RULE_CATEGORY_COLORS[winner.rule.category] || "#9ca3af");
+                const polyOpts = { color, weight: 4, opacity: 0.7 };
+                if (winner.isTowZone) polyOpts.dashArray = "8 6";
 
-                const maxDist = findDistanceToNextSign(sign, dir, allSigns, signWayGeo);
-                const latLngs = buildRuleCurveLatLngs(sign, signWayGeo, dir, stackIndex, maxDist);
-                if (!latLngs?.length) continue;
-                L.polyline(latLngs, {
-                  color: TOW_ZONE_COLOR, weight: 4, opacity: 0.7,
-                  dashArray: "8 6",
-                })
-                  .bindPopup(buildRulePopupHtml(tz, true))
+                L.polyline(latLngs, polyOpts)
+                  .bindPopup(buildRulePopupHtml(winner.rule, winner.isTowZone))
                   .addTo(ruleCurvesLayer);
               }
             });
