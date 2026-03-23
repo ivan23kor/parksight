@@ -990,6 +990,7 @@
           if (!detection.camera) return;
 
 
+          const cameraHeading = detection.heading;
           const cameraCircle = L.circle(
             [detection.camera.lat, detection.camera.lng],
             {
@@ -1002,6 +1003,24 @@
             },
           ).addTo(signMarkersLayer);
 
+          // Add direction arrow showing panorama heading
+          if (Number.isFinite(cameraHeading)) {
+            const arrowLength = 8;
+            const arrowLat = detection.camera.lat + (arrowLength / 111111) * Math.cos((cameraHeading * Math.PI) / 180);
+            const arrowLng = detection.camera.lng + (arrowLength / (111111 * Math.cos((detection.camera.lat * Math.PI) / 180))) * Math.sin((cameraHeading * Math.PI) / 180);
+            L.polyline(
+              [
+                [detection.camera.lat, detection.camera.lng],
+                [arrowLat, arrowLng],
+              ],
+              {
+                color: "#1d4ed8",
+                weight: 3,
+                opacity: 0.95,
+              },
+            ).addTo(signMarkersLayer);
+          }
+
           const signCount = Array.isArray(detection.signs)
             ? detection.signs.length
             : 0;
@@ -1013,17 +1032,6 @@
               `Pano: ${detection.panoId || "unknown"}<br>` +
               `Projected signs: ${signCount}`,
           );
-
-          const roadMarkerLatLngs = buildDetectionRoadMarkerLatLngs(detection);
-          if (roadMarkerLatLngs?.length >= 2) {
-            L.polyline(roadMarkerLatLngs, {
-              color: "#f59e0b",
-              weight: 3,
-              opacity: 0.7,
-              dashArray: "10 8",
-            }).addTo(signMarkersLayer);
-          }
-
 
           for (const sign of detection.signs || []) {
             if (!sign.panoId && detection.panoId) {
@@ -2140,6 +2148,7 @@
             lat: cameraLat,
             lng: cameraLng,
           },
+          heading: cameraHeading,
           streetBearing: roadContext.streetBearing,
           segmentStart: roadContext.segmentStart || null,
           segmentEnd: roadContext.segmentEnd || null,
