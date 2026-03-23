@@ -33,6 +33,7 @@ const RULE_CATEGORY_COLORS = {
 const TOW_ZONE_COLOR = "#dc2626";
 const RULE_CURVE_SAMPLE_STEP_METERS = 3;
 const RULE_CURVE_DEFAULT_LENGTH_METERS = 50;
+const RULE_CURVE_INTERSECTION_SKIP_METERS = 2;
 const RULE_CURVE_STACK_OFFSET_METERS = 0.8;
 
 
@@ -2718,6 +2719,87 @@ function walkWayGeometryByDistance(wayGeometry, anchor, signedDistanceMeters) {
   };
 }
 
+function getWaySegmentDistanceMeters(wayGeometry, segmentIndex) {
+  const segment = getWaySegment(wayGeometry, segmentIndex);
+  if (!segment) {
+    return null;
+  }
+
+  return haversineDistanceMeters(
+    segment.start.lat,
+    segment.start.lng,
+    segment.end.lat,
+    segment.end.lng,
+  );
+}
+
+function getWayNodeOffsetMeters(wayGeometry, nodeIndex) {
+  if (
+    !hasWayGeometry(wayGeometry) ||
+    !Number.isInteger(nodeIndex) ||
+    nodeIndex < 0 ||
+    nodeIndex >= wayGeometry.length
+  ) {
+    return null;
+  }
+
+  let total = 0;
+  for (let i = 0; i < nodeIndex; i += 1) {
+    const segmentDistance = getWaySegmentDistanceMeters(wayGeometry, i);
+    if (!Number.isFinite(segmentDistance)) {
+      return null;
+    }
+    total += segmentDistance;
+  }
+
+  return total;
+}
+
+function getWayAnchorOffsetMeters(wayGeometry, anchor) {
+  if (!anchor || !hasWayGeometry(wayGeometry)) {
+    return null;
+  }
+
+  const segmentIndex = clamp(anchor.segmentIndex ?? 0, 0, wayGeometry.length - 2);
+  const segmentStartOffset = getWayNodeOffsetMeters(wayGeometry, segmentIndex);
+  const segment = getWaySegment(wayGeometry, segmentIndex);
+  if (!Number.isFinite(segmentStartOffset) || !segment) {
+    return null;
+  }
+
+  return (
+    segmentStartOffset +
+    haversineDistanceMeters(
+      segment.start.lat,
+      segment.start.lng,
+      anchor.lat,
+      anchor.lng,
+    )
+  );
+}
+
+function getWayTravelDirectionSign(sign, wayGeometry, anchor) {
+  if (!anchor || !hasWayGeometry(wayGeometry)) {
+    return 1;
+  }
+
+  const trafficBearing = Number.isFinite(sign?.trafficBearing)
+    ? sign.trafficBearing
+    : (Number.isFinite(sign?.streetBearing) ? sign.streetBearing : null);
+  const anchorBearing = getWaySegmentBearing(
+    wayGeometry,
+    anchor.segmentIndex,
+    trafficBearing,
+  );
+  if (!Number.isFinite(anchorBearing) || !Number.isFinite(trafficBearing)) {
+    return 1;
+  }
+
+  return Math.abs(signedAngleDeltaDegrees(anchorBearing, trafficBearing)) <= 90
+    ? 1
+    : -1;
+}
+
 function getStreetCenterlineAnchor(cameraLat, cameraLng, options = {}) {
   const { segmentStart, segmentEnd } = options;
   if (!segmentStart || !segmentEnd) {
@@ -3653,25 +3735,103 @@ function renderDebugDecompositionLines(signLocations, cameraLat, cameraLng) {
 
 /**
  * Find distance to the next detected sign on the same side and same street.
- * Returns distance in meters, or RULE_CURVE_DEFAULT_LENGTH_METERS if none found.
+ * Returns distance in meters, or the next corner/endpoint distance if none found.
  *
  * @param {Object} sign - Current sign with lat, lng, side, wayGeometry
  * @param {number} direction - +1 (with traffic) or -1 (against traffic)
  * @param {Array} allSigns - All signs across all detections (each with wayGeometry attached)
  * @param {Array} wayGeometry - The wayGeometry for the current sign's street
+ * @param {Array} intersectionNodes - Shared way nodes [{ lat, lng, nodeIndex }, ...]
  */
-function findDistanceToNextSign(sign, direction, allSigns, wayGeometry) {
+function findDistanceToNearestCorner(
+  sign,
+  direction,
+  wayGeometry,
+  intersectionNodes,
+  signAnchor = null,
+) {
+  if (!hasWayGeometry(wayGeometry)) {
+    return RULE_CURVE_DEFAULT_LENGTH_METERS;
+  }
+
+  const anchor =
+    signAnchor ||
+    projectPointOntoWayGeometry(
+      sign.lat,
+      sign.lng,
+      wayGeometry,
+      sign.segmentIndex ?? null,
+    );
+  if (!anchor) {
+    return RULE_CURVE_DEFAULT_LENGTH_METERS;
+  }
+
+  const signOffset = getWayAnchorOffsetMeters(wayGeometry, anchor);
+  if (!Number.isFinite(signOffset)) {
+    return RULE_CURVE_DEFAULT_LENGTH_METERS;
+  }
+
+  const directionSign = direction * getWayTravelDirectionSign(sign, wayGeometry, anchor);
+  let nearestIntersection = Infinity;
+
+  for (const node of intersectionNodes || []) {
+    if (!Number.isInteger(node?.nodeIndex)) continue;
+
+    const nodeOffset = getWayNodeOffsetMeters(wayGeometry, node.nodeIndex);
+    if (!Number.isFinite(nodeOffset)) continue;
+
+    const signedDistance = nodeOffset - signOffset;
+    if (signedDistance * directionSign <= 0) continue;
+
+    const distanceMeters = Math.abs(signedDistance);
+    if (distanceMeters <= RULE_CURVE_INTERSECTION_SKIP_METERS) continue;
+
+    if (distanceMeters < nearestIntersection) {
+      nearestIntersection = distanceMeters;
+    }
+  }
+
+  if (Number.isFinite(nearestIntersection)) {
+    return nearestIntersection;
+  }
+
+  const endpointIndex = directionSign > 0 ? wayGeometry.length - 1 : 0;
+  const endpointOffset = getWayNodeOffsetMeters(wayGeometry, endpointIndex);
+  if (!Number.isFinite(endpointOffset)) {
+    return RULE_CURVE_DEFAULT_LENGTH_METERS;
+  }
+
+  return Math.abs(endpointOffset - signOffset);
+}
+
+function findDistanceToNextSign(
+  sign,
+  direction,
+  allSigns,
+  wayGeometry,
+  intersectionNodes = null,
+) {
   if (!hasWayGeometry(wayGeometry) || !sign.side) {
     return RULE_CURVE_DEFAULT_LENGTH_METERS;
   }
 
   const signAnchor = projectPointOntoWayGeometry(sign.lat, sign.lng, wayGeometry, sign.segmentIndex ?? null);
-  if (!signAnchor) return RULE_CURVE_DEFAULT_LENGTH_METERS;
+  if (!signAnchor) {
+    return RULE_CURVE_DEFAULT_LENGTH_METERS;
+  }
+
+  const signOffset = getWayAnchorOffsetMeters(wayGeometry, signAnchor);
+  if (!Number.isFinite(signOffset)) {
+    return RULE_CURVE_DEFAULT_LENGTH_METERS;
+  }
+
+  const directionSign =
+    direction * getWayTravelDirectionSign(sign, wayGeometry, signAnchor);
 
   // Use first node of wayGeometry as street identity
   const streetId = `${wayGeometry[0].lat},${getWayNodeLng(wayGeometry[0])}`;
 
-  let nearest = RULE_CURVE_DEFAULT_LENGTH_METERS;
+  let nearest = Infinity;
 
   for (const candidate of allSigns) {
     if (candidate === sign) continue;
@@ -3682,29 +3842,37 @@ function findDistanceToNextSign(sign, direction, allSigns, wayGeometry) {
 
     const cStreetId = `${cWay[0].lat},${getWayNodeLng(cWay[0])}`;
     if (cStreetId !== streetId) continue;
-
-    const cAnchor = projectPointOntoWayGeometry(candidate.lat, candidate.lng, wayGeometry, candidate.segmentIndex ?? null);
+    const cAnchor = projectPointOntoWayGeometry(
+      candidate.lat,
+      candidate.lng,
+      wayGeometry,
+      candidate.segmentIndex ?? null,
+    );
     if (!cAnchor) continue;
+    const candidateOffset = getWayAnchorOffsetMeters(wayGeometry, cAnchor);
+    if (!Number.isFinite(candidateOffset)) continue;
 
-    // Compute signed along-street distance from sign to candidate
-    // Walk from signAnchor to cAnchor and measure
-    const dist = haversineDistanceMeters(signAnchor.lat, signAnchor.lng, cAnchor.lat, cAnchor.lng);
-    if (dist < 1) continue; // Same sign
+    const signedDistance = candidateOffset - signOffset;
+    const distanceMeters = Math.abs(signedDistance);
+    if (distanceMeters < 1) continue;
+    if (signedDistance * directionSign <= 0) continue;
 
-    // Determine if candidate is in the requested direction
-    // Walk a small distance in the requested direction and check if candidate is closer
-    const probe = walkWayGeometryByDistance(wayGeometry, signAnchor, direction * 1);
-    if (!probe) continue;
-
-    const distFromProbe = haversineDistanceMeters(probe.lat, probe.lng, cAnchor.lat, cAnchor.lng);
-    const isInDirection = distFromProbe < dist;
-
-    if (isInDirection && dist < nearest) {
-      nearest = dist;
+    if (distanceMeters < nearest) {
+      nearest = distanceMeters;
     }
   }
 
-  return nearest;
+  if (Number.isFinite(nearest)) {
+    return nearest;
+  }
+
+  return findDistanceToNearestCorner(
+    sign,
+    direction,
+    wayGeometry,
+    intersectionNodes,
+    signAnchor,
+  );
 }
 
 /**
@@ -3746,9 +3914,7 @@ function buildRuleCurveLatLngs(sign, wayGeometry, direction, ruleIndex, maxDista
   if (!anchor) return null;
 
   // Align walk direction with traffic bearing (way geometry array order may oppose traffic flow)
-  const anchorBearing = getWaySegmentBearing(wayGeometry, anchor.segmentIndex, sign.trafficBearing);
-  const walkDirectionSign =
-    Math.abs(signedAngleDeltaDegrees(anchorBearing, sign.trafficBearing)) <= 90 ? 1 : -1;
+  const walkDirectionSign = getWayTravelDirectionSign(sign, wayGeometry, anchor);
 
   const points = [];
   for (let d = 0; d <= maxDistanceMeters; d += RULE_CURVE_SAMPLE_STEP_METERS) {

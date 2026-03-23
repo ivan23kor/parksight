@@ -763,6 +763,8 @@
               nearestStreet.segmentIndex ??
               currentDetectionContext?.segmentIndex ??
               null,
+            allWays:
+              nearestStreet.allWays || currentDetectionContext?.allWays || null,
             streetName:
               nearestStreet.streetName ||
               currentDetectionContext?.streetName ||
@@ -1012,6 +1014,16 @@
               `Projected signs: ${signCount}`,
           );
 
+          const roadMarkerLatLngs = buildDetectionRoadMarkerLatLngs(detection);
+          if (roadMarkerLatLngs?.length >= 2) {
+            L.polyline(roadMarkerLatLngs, {
+              color: "#f59e0b",
+              weight: 3,
+              opacity: 0.7,
+              dashArray: "10 8",
+            }).addTo(signMarkersLayer);
+          }
+
 
           for (const sign of detection.signs || []) {
             if (!sign.panoId && detection.panoId) {
@@ -1115,7 +1127,12 @@
         for (const detection of data?.detections || []) {
           const wayGeo = detection.wayGeometry;
           for (const sign of detection.signs || []) {
-            allSigns.push({ ...sign, wayGeometry: wayGeo || sign.wayGeometry });
+            allSigns.push({
+              ...sign,
+              wayGeometry: wayGeo || sign.wayGeometry,
+              segmentIndex: sign.segmentIndex ?? detection.segmentIndex ?? null,
+              allWays: detection.allWays || sign.allWays || null,
+            });
           }
         }
 
@@ -1125,12 +1142,39 @@
 
         for (const detection of data?.detections || []) {
           const wayGeometry = detection.wayGeometry;
+          const detectionAllWays = detection.allWays || null;
+          const detectionIntersectionNodes =
+            Array.isArray(wayGeometry) &&
+            wayGeometry.length >= 2 &&
+            Array.isArray(detectionAllWays) &&
+            detectionAllWays.length > 0 &&
+            typeof findIntersectionNodes === "function"
+              ? findIntersectionNodes(wayGeometry, detectionAllWays)
+              : [];
 
           for (const sign of detection.signs || []) {
             const ocrResult = sign.ocrResult;
             if (!ocrResult?.is_parking_sign) continue;
 
             const signWayGeo = wayGeometry || sign.wayGeometry;
+            const signContext = {
+              ...sign,
+              wayGeometry: signWayGeo,
+              segmentIndex: sign.segmentIndex ?? detection.segmentIndex ?? null,
+              allWays: detectionAllWays || sign.allWays || null,
+            };
+            const intersectionNodes =
+              signWayGeo === wayGeometry
+                ? detectionIntersectionNodes
+                : (
+                  Array.isArray(signWayGeo) &&
+                  signWayGeo.length >= 2 &&
+                  Array.isArray(signContext.allWays) &&
+                  signContext.allWays.length > 0 &&
+                  typeof findIntersectionNodes === "function"
+                    ? findIntersectionNodes(signWayGeo, signContext.allWays)
+                    : []
+                );
             const signLocKey = `${sign.lat.toFixed(SIGN_LOCATION_PRECISION)},${sign.lng.toFixed(SIGN_LOCATION_PRECISION)}`;
 
             // Select winning rule for each arrow direction (left/right)
@@ -1145,11 +1189,22 @@
               const curveKey = `${signLocKey}|${arrowDir}`;
               if (renderedKeys.has(curveKey)) return;
               renderedKeys.add(curveKey);
-
-              const directions = arrowToAlongStreetDirections(arrowDir, sign.side);
+              const directions = arrowToAlongStreetDirections(arrowDir, signContext.side);
               for (const dir of directions) {
-                const maxDist = findDistanceToNextSign(sign, dir, allSigns, signWayGeo);
-                const latLngs = buildRuleCurveLatLngs(sign, signWayGeo, dir, winner.ruleIndex, maxDist);
+                const maxDist = findDistanceToNextSign(
+                  signContext,
+                  dir,
+                  allSigns,
+                  signWayGeo,
+                  intersectionNodes,
+                );
+                const latLngs = buildRuleCurveLatLngs(
+                  signContext,
+                  signWayGeo,
+                  dir,
+                  winner.ruleIndex,
+                  maxDist,
+                );
                 if (!latLngs?.length) continue;
 
                 const color = winner.isTowZone ? TOW_ZONE_COLOR : (RULE_CATEGORY_COLORS[winner.rule.category] || "#9ca3af");
@@ -1964,6 +2019,7 @@
           segmentEnd: point.segmentEnd || null,
           wayGeometry: point.wayGeometry || null,
           segmentIndex: point.segmentIndex ?? null,
+          allWays: point.allWays || null,
           streetName: point.streetName || "Unknown street",
         };
 
@@ -1996,6 +2052,7 @@
             segmentEnd: null,
             wayGeometry: null,
             segmentIndex: null,
+            allWays: null,
             streetName: undefined,
           };
           await ensureDetectionRoadContext(curLat, curLng);
@@ -2088,6 +2145,7 @@
           segmentEnd: roadContext.segmentEnd || null,
           wayGeometry: roadContext.wayGeometry || null,
           segmentIndex: roadContext.segmentIndex ?? null,
+          allWays: roadContext.allWays || null,
           streetName: roadContext.streetName,
           signs: signLocations,
         };
