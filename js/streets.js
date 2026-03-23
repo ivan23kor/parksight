@@ -297,10 +297,20 @@ function findNearestStreetContext(lat, lon, ways) {
 }
 
 /**
- * Find nodes in wayGeometry that are shared with other ways (street intersections).
+ * Flat-earth bearing (degrees, 0 = north, 90 = east). Accurate enough at city scale.
+ */
+function _localBearingDegrees(fromLat, fromLng, toLat, toLng) {
+    const dLat = toLat - fromLat;
+    const dLng = (toLng - fromLng) * Math.cos((fromLat * Math.PI) / 180);
+    return ((Math.atan2(dLng, dLat) * 180) / Math.PI + 360) % 360;
+}
+
+/**
+ * Find nodes in wayGeometry that are shared with other ways (real street intersections).
+ * Filters out same-street continuation splits by checking street names and crossing angles.
  * @param {Array} wayGeometry - Nodes of the main way [{lat, lon}, ...]
  * @param {Array} allWays - All ways in the area from Overpass [{geometry, tags}, ...]
- * @returns {Array} Intersection nodes [{lat, lon, nodeIndex}, ...]
+ * @returns {Array} Intersection nodes [{lat, lng, nodeIndex, crossStreetTags}, ...]
  */
 function findIntersectionNodes(wayGeometry, allWays) {
     if (!wayGeometry || wayGeometry.length === 0 || !allWays || allWays.length === 0) {
@@ -308,27 +318,95 @@ function findIntersectionNodes(wayGeometry, allWays) {
     }
 
     const PRECISION = 5; // ~1m at equator
-    const coordKeyToWayCount = new Map();
+    const MIN_CROSSING_ANGLE_DEG = 25;
 
-    // Count how many ways each coordinate appears in
+    // Build map: coordKey → [{way, nodeIndex}]
+    const coordKeyToWayInfos = new Map();
+
     for (const way of allWays) {
         const nodes = way.geometry || [];
-        const seenKeys = new Set(); // Avoid double-counting same node in same way
+        const seenKeys = new Set();
 
-        for (const node of nodes) {
-            const lat = node.lat;
-            const lng = node.lon ?? node.lng;
+        for (let i = 0; i < nodes.length; i++) {
+            const lat = nodes[i].lat;
+            const lng = nodes[i].lon ?? nodes[i].lng;
             if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
 
             const key = `${lat.toFixed(PRECISION)},${lng.toFixed(PRECISION)}`;
-            if (!seenKeys.has(key)) {
-                seenKeys.add(key);
-                coordKeyToWayCount.set(key, (coordKeyToWayCount.get(key) || 0) + 1);
+            if (seenKeys.has(key)) continue;
+            seenKeys.add(key);
+
+            if (!coordKeyToWayInfos.has(key)) {
+                coordKeyToWayInfos.set(key, []);
             }
+            coordKeyToWayInfos.get(key).push({ way, nodeIndex: i });
         }
     }
 
-    // Find wayGeometry nodes appearing in 2+ ways (intersections)
+    // Helper: street direction (0–180°) of a way at a given node index
+    function streetDirectionAtNode(way, nodeIndex) {
+        const nodes = way.geometry || [];
+        if (nodes.length < 2) return null;
+
+        let from, to;
+        if (nodeIndex < nodes.length - 1) {
+            from = nodes[nodeIndex];
+            to = nodes[nodeIndex + 1];
+        } else {
+            from = nodes[nodeIndex - 1];
+            to = nodes[nodeIndex];
+        }
+
+        const fromLng = from.lon ?? from.lng;
+        const toLng = to.lon ?? to.lng;
+        if (!Number.isFinite(from.lat) || !Number.isFinite(fromLng) ||
+            !Number.isFinite(to.lat) || !Number.isFinite(toLng)) return null;
+
+        const bearing = _localBearingDegrees(from.lat, fromLng, to.lat, toLng);
+        return ((bearing % 180) + 180) % 180;
+    }
+
+    // Helper: check if a set of ways at a shared node form a real intersection
+    function classifyCrossing(wayInfos) {
+        const names = new Set();
+        let allNamed = true;
+        const crossStreetTags = [];
+
+        for (const info of wayInfos) {
+            const name = info.way.tags?.name;
+            if (name) { names.add(name); } else { allNamed = false; }
+        }
+
+        // 2+ distinct named streets → real intersection
+        if (names.size >= 2) {
+            return { isCrossing: true };
+        }
+
+        // All ways share the same single name → continuation split
+        if (names.size === 1 && allNamed) {
+            return { isCrossing: false };
+        }
+
+        // Ambiguous names: fall back to bearing angle check
+        const dirs = [];
+        for (const info of wayInfos) {
+            const d = streetDirectionAtNode(info.way, info.nodeIndex);
+            if (d !== null) dirs.push(d);
+        }
+
+        for (let i = 0; i < dirs.length; i++) {
+            for (let j = i + 1; j < dirs.length; j++) {
+                const diff = Math.abs(dirs[i] - dirs[j]);
+                if (Math.min(diff, 180 - diff) > MIN_CROSSING_ANGLE_DEG) {
+                    return { isCrossing: true };
+                }
+            }
+        }
+
+        return { isCrossing: false };
+    }
+
+    // Find real intersection nodes
     const intersectionNodes = [];
     for (let nodeIdx = 0; nodeIdx < wayGeometry.length; nodeIdx++) {
         const node = wayGeometry[nodeIdx];
@@ -337,15 +415,36 @@ function findIntersectionNodes(wayGeometry, allWays) {
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
 
         const key = `${lat.toFixed(PRECISION)},${lng.toFixed(PRECISION)}`;
-        const wayCount = coordKeyToWayCount.get(key) || 0;
+        const wayInfos = coordKeyToWayInfos.get(key);
+        if (!wayInfos || wayInfos.length < 2) continue;
 
-        if (wayCount >= 2) {
-            intersectionNodes.push({
-                lat,
-                lng,
-                nodeIndex: nodeIdx,
+        const { isCrossing } = classifyCrossing(wayInfos);
+        if (!isCrossing) continue;
+
+        // Collect cross-street tags (ways whose direction differs from main way)
+        const mainDir = streetDirectionAtNode({ geometry: wayGeometry }, nodeIdx);
+        const crossStreetTags = [];
+
+        for (const info of wayInfos) {
+            const otherDir = streetDirectionAtNode(info.way, info.nodeIndex);
+            if (mainDir !== null && otherDir !== null) {
+                const diff = Math.abs(mainDir - otherDir);
+                if (Math.min(diff, 180 - diff) <= MIN_CROSSING_ANGLE_DEG) continue;
+            }
+            const tags = info.way.tags || {};
+            crossStreetTags.push({
+                highway: tags.highway || null,
+                lanes: tags.lanes || null,
+                oneway: tags.oneway || null,
             });
         }
+
+        intersectionNodes.push({
+            lat,
+            lng,
+            nodeIndex: nodeIdx,
+            crossStreetTags,
+        });
     }
 
     return intersectionNodes;
