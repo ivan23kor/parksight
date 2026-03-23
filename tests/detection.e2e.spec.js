@@ -527,7 +527,7 @@ test.describe("detection flow", () => {
     });
 
     await page.locator("#detectionStatus").click();
-    await expect(page.locator("#detectionStatus")).toContainText("Found 2 parking signs");
+    await expect(page.locator("#detectionStatus")).toContainText("Found 2 sign(s)");
 
     const stored = await page.evaluate(() =>
       JSON.parse(localStorage.getItem("parksight_latest_sign_map_data")),
@@ -565,7 +565,7 @@ test.describe("detection flow", () => {
     });
 
     await page.locator("#detectionStatus").click();
-    await expect(page.locator("#detectionStatus")).toContainText("Found 2 parking signs");
+    await expect(page.locator("#detectionStatus")).toContainText("Found 2 sign(s)");
 
     const roadMarkers = await page.evaluate(() =>
       signMarkersLayer._layers
@@ -611,11 +611,35 @@ test.describe("detection flow", () => {
           { lat: 42.361809, lon: -71.091504 },
         ],
         segmentIndex: 1,
+        allWays: [
+          {
+            id: 1,
+            type: "way",
+            geometry: [
+              { lat: 42.36128, lon: -71.092562 },
+              { lat: 42.361486, lon: -71.092159 },
+              { lat: 42.361545, lon: -71.092039 },
+              { lat: 42.361586, lon: -71.09195 },
+              { lat: 42.361809, lon: -71.091504 },
+            ],
+            tags: { highway: "secondary", name: "Vassar Street" },
+          },
+          {
+            id: 2,
+            type: "way",
+            geometry: [
+              { lat: 42.361545, lon: -71.09218 },
+              { lat: 42.361545, lon: -71.092039 },
+              { lat: 42.361545, lon: -71.09188 },
+            ],
+            tags: { highway: "secondary", name: "Cross Street" },
+          },
+        ],
       });
     });
 
     await page.locator("#detectionStatus").click();
-    await expect(page.locator("#detectionStatus")).toContainText("Found 2 parking signs");
+    await expect(page.locator("#detectionStatus")).toContainText("Found 2 sign(s)");
 
     const roadMarkers = await page.evaluate(() =>
       signMarkersLayer._layers
@@ -631,8 +655,121 @@ test.describe("detection flow", () => {
     );
     expect(stored?.detections?.[0]?.streetName).toBe("Vassar Street");
     expect(stored?.detections?.[0]?.wayGeometry?.length).toBeGreaterThan(2);
+    expect(stored?.detections?.[0]?.allWays?.length).toBe(2);
   });
 
+  test("limits rule curves to the nearest corner when no same-side sign is ahead", async ({
+    page,
+  }) => {
+    await mockExternalDependencies(page);
+    await page.goto("/?api_key=test-key");
+
+    const result = await page.evaluate(() => {
+      const wayGeometry = [
+        { lat: 42.3615, lon: -71.0924 },
+        { lat: 42.3615, lon: -71.09218 },
+        { lat: 42.3615, lon: -71.0920 },
+        { lat: 42.3615, lon: -71.0918 },
+      ];
+      const allWays = [
+        {
+          id: 1,
+          type: "way",
+          geometry: wayGeometry,
+          tags: { highway: "secondary", name: "Main Street" },
+        },
+        {
+          id: 2,
+          type: "way",
+          geometry: [
+            { lat: 42.36134, lon: -71.0920 },
+            { lat: 42.3615, lon: -71.0920 },
+            { lat: 42.36166, lon: -71.0920 },
+          ],
+          tags: { highway: "secondary", name: "Cross Street" },
+        },
+      ];
+
+      const signBase = projectSignToCurbLine(42.3615, -71.09222, 6, 90, {
+        streetBearing: 90,
+        side: "right",
+        oneway: null,
+        wayGeometry,
+        segmentIndex: 1,
+        segmentStart: { lat: 42.3615, lon: -71.09218 },
+        segmentEnd: { lat: 42.3615, lon: -71.0920 },
+        cameraHeading: 90,
+      });
+      const sign = {
+        ...signBase,
+        heading: 90,
+        pitch: -2,
+        confidence: 0.91,
+        class_name: "parking_sign",
+        segmentIndex: 1,
+        ocrResult: {
+          is_parking_sign: true,
+          rules: [
+            {
+              category: "no_parking",
+              arrow_direction: "left",
+              days: ["mon"],
+              time_start: "00:00",
+              time_end: "23:59",
+            },
+          ],
+          tow_zones: [],
+        },
+      };
+
+      const intersections = findIntersectionNodes(wayGeometry, allWays);
+      const maxDist = findDistanceToNextSign(sign, 1, [sign], wayGeometry, intersections);
+
+      renderSignMapData({
+        savedAt: Date.now(),
+        source: "test",
+        projectionVersion: 6,
+        detections: [
+          {
+            camera: { lat: 42.3615, lng: -71.09222 },
+            panoId: "mock-pano",
+            streetBearing: 90,
+            segmentStart: { lat: 42.3615, lon: -71.09218 },
+            segmentEnd: { lat: 42.3615, lon: -71.0920 },
+            wayGeometry,
+            segmentIndex: 1,
+            allWays,
+            signs: [sign],
+          },
+        ],
+      });
+
+      const renderedCurve = ruleCurvesLayer._layers[0]?._latlngs || [];
+      let renderedCurveLength = 0;
+      for (let i = 0; i < renderedCurve.length - 1; i += 1) {
+        renderedCurveLength += haversineDistanceMeters(
+          renderedCurve[i][0],
+          renderedCurve[i][1],
+          renderedCurve[i + 1][0],
+          renderedCurve[i + 1][1],
+        );
+      }
+
+      return {
+        intersectionCount: intersections.length,
+        maxDist,
+        renderedCurvePointCount: renderedCurve.length,
+        renderedCurveLength,
+      };
+    });
+
+    expect(result.intersectionCount).toBe(1);
+    expect(result.maxDist).toBeGreaterThan(8);
+    expect(result.maxDist).toBeLessThan(15);
+    expect(result.renderedCurvePointCount).toBeGreaterThanOrEqual(3);
+    expect(result.renderedCurveLength).toBeGreaterThan(6);
+    expect(result.renderedCurveLength).toBeLessThan(15);
+  });
 
   test("projects signs at a fixed offset from the matched OSM road polyline", async ({
     page,
@@ -702,7 +839,7 @@ test.describe("detection flow", () => {
     });
 
     await page.locator("#detectionStatus").click();
-    await expect(page.locator("#detectionStatus")).toContainText("Found 2 parking signs");
+    await expect(page.locator("#detectionStatus")).toContainText("Found 2 sign(s)");
 
     const projection = await page.evaluate(() =>
       JSON.parse(localStorage.getItem("parksight_latest_sign_map_data")),
