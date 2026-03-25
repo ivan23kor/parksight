@@ -1207,60 +1207,60 @@ class OcrSignResponse(BaseModel):
 @app.post("/ocr-sign", response_model=OcrSignResponse)
 async def ocr_sign(request: OcrSignRequest):
     """
-    Parse parking sign text using vision LLM (gemini-3-flash).
+    Parse parking sign text using vision LLM (gemini-3-flash-preview).
 
     Takes a base64-encoded cropped sign image and returns structured
     parking regulation data including rules, time limits, and payment info.
     """
+    import asyncio
     # Detect image format from base64 header bytes
     import base64 as _b64
-    raw = _b64.b64decode(request.image_base64[:16])
+    raw = _b64.b64decode(request.image_base64[:32])
     mime = "image/png" if raw[:4] == b'\x89PNG' else "image/jpeg"
-    image_data_url = f"data:{mime};base64,{request.image_base64}"
 
     start_time = time.time()
 
+    gemini_api_key = os.environ.get("GEMINI_API_KEY")
+    if not gemini_api_key:
+        raise HTTPException(status_code=502, detail="GEMINI_API_KEY not configured")
+
+    max_retries = 3
     async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.post(
-                "http://localhost:8317/v1/chat/completions",
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {os.environ.get('CLI_PROXY_API_KEY')}"
-                },
-                json={
-                    "model": "gemini-3-flash",
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "image_url",
-                                    "image_url": {"url": image_data_url}
-                                },
-                                {
-                                    "type": "text",
-                                    "text": OCR_PROMPT
-                                }
+        for attempt in range(max_retries):
+            try:
+                resp = await client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={gemini_api_key}",
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "contents": [{
+                            "parts": [
+                                {"inline_data": {"mime_type": mime, "data": request.image_base64}},
+                                {"text": OCR_PROMPT}
                             ]
-                        }
-                    ],
-                    "max_tokens": 4096
-                },
-                timeout=60.0
-            )
-            resp.raise_for_status()
-        except httpx.HTTPError as e:
-            raise HTTPException(status_code=502, detail=f"OCR API error: {e}")
+                        }],
+                        "generationConfig": {"maxOutputTokens": 4096}
+                    },
+                    timeout=60.0
+                )
+                resp.raise_for_status()
+                break
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                raise HTTPException(status_code=502, detail=f"OCR API error: {e.response.status_code} {e.response.reason_phrase}")
+            except httpx.HTTPError as e:
+                raise HTTPException(status_code=502, detail=f"OCR API error: {e}")
 
     inference_time_ms = (time.time() - start_time) * 1000
 
     data = resp.json()
 
-    if not data.get("choices") or not data["choices"][0].get("message", {}).get("content"):
-        raise HTTPException(status_code=502, detail="Empty response from OCR API")
-
-    content = data["choices"][0]["message"]["content"].strip()
+    # Extract text from Gemini response format
+    try:
+        content = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except (KeyError, IndexError, TypeError):
+        raise HTTPException(status_code=502, detail=f"Unexpected Gemini response format: {data}")
 
     # Parse JSON response
     try:
