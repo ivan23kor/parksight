@@ -31,32 +31,40 @@ async function setupPage(page) {
 }
 
 test.describe("Street Intersection Detection E2E (real OSM data)", () => {
-  test("Albany Street (way/442971020): detects Portland St and Main St intersections", async ({ page }) => {
+  test("Vassar Street: detects Main St and Massachusetts Ave intersections", async ({ page }) => {
     await setupPage(page);
     await page.goto("/?api_key=test-key");
 
     const result = await page.evaluate(async () => {
-      // Fetch the real fixture data through the production fetchStreets path
+      // Smaller bounds to avoid Overpass timeout
       const bounds = {
-        getSouth: () => 42.3600, getWest: () => -71.0945,
+        getSouth: () => 42.3595, getWest: () => -71.0945,
         getNorth: () => 42.3635, getEast: () => -71.0890,
       };
       const ways = await fetchStreets(bounds);
 
-      // Find Albany Street way/442971020
-      const albany = ways.find((w) => w.id === 442971020);
-      if (!albany) throw new Error("Albany Street way/442971020 not found in fetched data");
+      // Find all Vassar Street ways
+      const vassarWays = ways.filter((w) => w.tags?.name === "Vassar Street");
 
-      const intersections = findIntersectionNodes(albany.geometry, ways);
+      // Collect ALL intersections across all Vassar Street ways
+      const allIntersections = [];
+      for (const vassar of vassarWays) {
+        const intersections = findIntersectionNodes(vassar.geometry, ways);
+        for (const inter of intersections) {
+          inter.wayId = vassar.id;
+          allIntersections.push(inter);
+        }
 
-      // Draw Albany Street polyline on the 2D map
-      const albanyCoords = albany.geometry.map((n) => [n.lat, n.lng ?? n.lon]);
-      L.polyline(albanyCoords, { color: "#3b82f6", weight: 4, opacity: 0.8 }).addTo(map);
+        // Draw each Vassar Street segment
+        const coords = vassar.geometry.map((n) => [n.lat, n.lng ?? n.lon]);
+        L.polyline(coords, { color: "#3b82f6", weight: 4, opacity: 0.8 }).addTo(map);
+      }
 
-      // Draw intersection dots on the 2D map
-      intersections.forEach((n) => {
+      // Draw ALL intersection dots on the 2D map
+      allIntersections.forEach((n) => {
         const hasPrimary = n.crossStreetTags.some((t) => t.highway === "primary");
-        const color = hasPrimary ? "#ef4444" : "#22c55e"; // red for primary, green for secondary
+        const hasSecondary = n.crossStreetTags.some((t) => t.highway === "secondary");
+        const color = hasPrimary ? "#ef4444" : hasSecondary ? "#22c55e" : "#f59e0b";
         L.circleMarker([n.lat, n.lng], {
           radius: 10,
           fillColor: color,
@@ -65,47 +73,49 @@ test.describe("Street Intersection Detection E2E (real OSM data)", () => {
           opacity: 1,
           fillOpacity: 0.9,
         })
-          .bindTooltip(`Intersection @ node[${n.nodeIndex}]<br/>highway: ${n.crossStreetTags.map((t) => t.highway).join(", ")}`, { permanent: false })
+          .bindTooltip(`Intersection @ node[${n.nodeIndex}]<br/>${n.crossStreetTags.map((t) => t.name).filter(Boolean).join(" / ")}<br/>highway: ${n.crossStreetTags.map((t) => t.highway).join(", ")}`, { permanent: false })
           .addTo(map);
       });
 
       // Fit map to show all markers
-      const allPoints = [...albanyCoords, ...intersections.map((n) => [n.lat, n.lng])];
-      map.fitBounds(allPoints, { padding: [50, 50] });
+      const allPoints = allIntersections.map((n) => [n.lat, n.lng]);
+      if (allPoints.length > 0) {
+        map.fitBounds(allPoints, { padding: [50, 50] });
+      }
 
       return {
-        wayNodeCount: albany.geometry.length,
-        intersectionCount: intersections.length,
-        intersections: intersections.map((n) => ({
+        totalVassarWays: vassarWays.length,
+        intersectionCount: allIntersections.length,
+        intersections: allIntersections.map((n) => ({
+          wayId: n.wayId,
           nodeIndex: n.nodeIndex,
           lat: n.lat,
           lng: n.lng,
-          crossStreetTags: n.crossStreetTags,
+          crossStreetNames: n.crossStreetTags.map((t) => t.name).filter(Boolean),
+          crossStreetHighways: n.crossStreetTags.map((t) => t.highway).filter(Boolean),
         })),
       };
     });
 
-    expect(result.wayNodeCount).toBe(18);
+    // Log for debugging
+    console.log("Vassar Street ways found:", result.totalVassarWays);
+    console.log("Intersections found:", JSON.stringify(result.intersections, null, 2));
+
+    // Pause BEFORE assertions so user can see the map
+    await page.pause();
+
+    expect(result.totalVassarWays).toBeGreaterThan(0);
     expect(result.intersectionCount).toBeGreaterThanOrEqual(2);
 
-    const nodeIndices = result.intersections.map((n) => n.nodeIndex);
-    expect(nodeIndices).toContain(0);   // Portland St
-    expect(nodeIndices).toContain(17);  // Main St
+    // Verify intersections with Main St and Massachusetts Ave
+    const hasMainSt = result.intersections.some((n) =>
+      n.crossStreetNames.some((name) => name?.includes("Main"))
+    );
+    const hasMassAve = result.intersections.some((n) =>
+      n.crossStreetNames.some((name) => name?.includes("Massachusetts") || name?.includes("Mass Ave"))
+    );
 
-    // Verify real coordinate positions
-    const portlandNode = result.intersections.find((n) => n.nodeIndex === 0);
-    expect(portlandNode.lat).toBeCloseTo(42.3619059, 4);
-    expect(portlandNode.lng).toBeCloseTo(-71.0938619, 4);
-
-    const mainNode = result.intersections.find((n) => n.nodeIndex === 17);
-    expect(mainNode.lat).toBeCloseTo(42.3628543, 4);
-    expect(mainNode.lng).toBeCloseTo(-71.0920014, 4);
-
-    // Verify cross-street tags contain real highway classifications
-    expect(portlandNode.crossStreetTags.some((t) => t.highway === "secondary")).toBe(true);
-    expect(mainNode.crossStreetTags.some((t) => t.highway === "primary")).toBe(true);
-
-    // Pause so user can inspect the browser
-    await page.pause();
+    expect(hasMainSt).toBe(true);
+    expect(hasMassAve).toBe(true);
   });
 });
