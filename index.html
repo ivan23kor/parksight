@@ -1184,11 +1184,15 @@
             if (intersectionCache.has(signWayGeo)) {
               intersectionNodes = intersectionCache.get(signWayGeo);
             } else {
+              // Include sign's own street in allWays so its nodes match for intersection detection
+              const extendedAllWays = Array.isArray(signWayGeo) && signWayGeo.length >= 2
+                ? [...renderAllWays, { geometry: signWayGeo, tags: {} }]
+                : renderAllWays;
               intersectionNodes =
                 Array.isArray(signWayGeo) &&
                 signWayGeo.length >= 2 &&
-                renderAllWays.length > 0
-                  ? findIntersectionNodes(signWayGeo, renderAllWays)
+                extendedAllWays.length > 0
+                  ? findIntersectionNodes(signWayGeo, extendedAllWays)
                   : [];
               intersectionCache.set(signWayGeo, intersectionNodes);
             }
