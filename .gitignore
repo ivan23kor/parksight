@@ -41,3 +41,6 @@ detected_signs/
 
 # Playwright test output
 test-results/
+
+# Playwright trace files
+*.trace
