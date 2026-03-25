@@ -763,8 +763,6 @@
               nearestStreet.segmentIndex ??
               currentDetectionContext?.segmentIndex ??
               null,
-            allWays:
-              nearestStreet.allWays || currentDetectionContext?.allWays || null,
             streetName:
               nearestStreet.streetName ||
               currentDetectionContext?.streetName ||
@@ -971,7 +969,7 @@
         return pts;
       }
 
-      function renderSignMapData(data) {
+      async function renderSignMapData(data) {
         latestRenderedSignMapData = data;
         signMarkersLayer.clearLayers();
 
@@ -1074,7 +1072,7 @@
 
 
 
-        renderRuleCurves(data);
+        await renderRuleCurves(data);
       }
 
       function buildRulePopupHtml(rule, isTowZone = false) {
@@ -1138,8 +1136,16 @@
         return candidates[0];
       }
 
-      function renderRuleCurves(data) {
+      async function renderRuleCurves(data) {
         ruleCurvesLayer.clearLayers();
+
+        // Fetch allWays for visible map area (bounded to current viewport)
+        let renderAllWays = [];
+        try {
+          renderAllWays = await fetchStreets(map.getBounds());
+        } catch (e) {
+          console.warn("renderRuleCurves: failed to fetch streets for map bounds", e);
+        }
 
         // Collect all signs across all detections for distance-to-next-sign lookup
         const allSigns = [];
@@ -1150,7 +1156,6 @@
               ...sign,
               wayGeometry: wayGeo || sign.wayGeometry,
               segmentIndex: sign.segmentIndex ?? detection.segmentIndex ?? null,
-              allWays: detection.allWays || sign.allWays || null,
             });
           }
         }
@@ -1159,18 +1164,11 @@
         const renderedKeys = new Set();
         const SIGN_LOCATION_PRECISION = 4; // ~11m precision for dedup
 
+        // Cache intersection nodes per wayGeometry reference
+        const intersectionCache = new Map();
+
         for (const detection of data?.detections || []) {
           const wayGeometry = detection.wayGeometry;
-          const detectionAllWays = detection.allWays || null;
-          const detectionIntersectionNodes =
-            Array.isArray(wayGeometry) &&
-            wayGeometry.length >= 2 &&
-            Array.isArray(detectionAllWays) &&
-            detectionAllWays.length > 0 &&
-            typeof findIntersectionNodes === "function"
-              ? findIntersectionNodes(wayGeometry, detectionAllWays)
-              : [];
-          if (window.DEBUG_RULE_CURVES) console.log(`[renderRuleCurves] detection: wayGeo=${wayGeometry?.length ?? 0} nodes, allWays=${detectionAllWays?.length ?? 0}, intersectionNodes=${detectionIntersectionNodes.length}`, detectionIntersectionNodes);
 
           for (const sign of detection.signs || []) {
             const ocrResult = sign.ocrResult;
@@ -1181,20 +1179,20 @@
               ...sign,
               wayGeometry: signWayGeo,
               segmentIndex: sign.segmentIndex ?? detection.segmentIndex ?? null,
-              allWays: detectionAllWays || sign.allWays || null,
             };
-            const intersectionNodes =
-              signWayGeo === wayGeometry
-                ? detectionIntersectionNodes
-                : (
-                  Array.isArray(signWayGeo) &&
-                  signWayGeo.length >= 2 &&
-                  Array.isArray(signContext.allWays) &&
-                  signContext.allWays.length > 0 &&
-                  typeof findIntersectionNodes === "function"
-                    ? findIntersectionNodes(signWayGeo, signContext.allWays)
-                    : []
-                );
+            let intersectionNodes;
+            if (intersectionCache.has(signWayGeo)) {
+              intersectionNodes = intersectionCache.get(signWayGeo);
+            } else {
+              intersectionNodes =
+                Array.isArray(signWayGeo) &&
+                signWayGeo.length >= 2 &&
+                renderAllWays.length > 0
+                  ? findIntersectionNodes(signWayGeo, renderAllWays)
+                  : [];
+              intersectionCache.set(signWayGeo, intersectionNodes);
+            }
+            if (window.DEBUG_RULE_CURVES) console.log(`[renderRuleCurves] sign=(${sign.lat.toFixed(6)},${sign.lng.toFixed(6)}) wayGeo=${signWayGeo?.length ?? 0} nodes, allWays=${renderAllWays.length}, intersectionNodes=${intersectionNodes.length}`, intersectionNodes);
             const signLocKey = `${sign.lat.toFixed(SIGN_LOCATION_PRECISION)},${sign.lng.toFixed(SIGN_LOCATION_PRECISION)}`;
 
             // Select winning rule for each arrow direction (left/right)
@@ -1228,11 +1226,20 @@
                 if (window.DEBUG_RULE_CURVES) console.log(`[renderRuleCurves] sign=(${sign.lat.toFixed(6)},${sign.lng.toFixed(6)}) side=${signContext.side} arrowDir=${arrowDir} dir=${dir} → maxDist=${maxDist.toFixed(2)}m, curvePoints=${latLngs?.length ?? 0}`);
                 if (!latLngs?.length) continue;
 
+                // Trim curve to map viewport — stop at first point outside bounds
+                const mapBounds = map.getBounds();
+                let trimIdx = latLngs.length;
+                for (let k = 0; k < latLngs.length; k++) {
+                  if (!mapBounds.contains(latLngs[k])) { trimIdx = k; break; }
+                }
+                if (trimIdx === 0) continue;
+                const visibleLatLngs = trimIdx < latLngs.length ? latLngs.slice(0, trimIdx) : latLngs;
+
                 const color = winner.isTowZone ? TOW_ZONE_COLOR : (RULE_CATEGORY_COLORS[winner.rule.category] || "#9ca3af");
                 const polyOpts = { color, weight: 4, opacity: 0.7 };
                 if (winner.isTowZone) polyOpts.dashArray = "8 6";
 
-                L.polyline(latLngs, polyOpts)
+                L.polyline(visibleLatLngs, polyOpts)
                   .bindPopup(buildRulePopupHtml(winner.rule, winner.isTowZone))
                   .addTo(ruleCurvesLayer);
               }
@@ -2040,7 +2047,6 @@
           segmentEnd: point.segmentEnd || null,
           wayGeometry: point.wayGeometry || null,
           segmentIndex: point.segmentIndex ?? null,
-          allWays: point.allWays || null,
           streetName: point.streetName || "Unknown street",
         };
 
@@ -2073,7 +2079,6 @@
             segmentEnd: null,
             wayGeometry: null,
             segmentIndex: null,
-            allWays: null,
             streetName: undefined,
           };
           await ensureDetectionRoadContext(curLat, curLng);
@@ -2167,7 +2172,6 @@
           segmentEnd: roadContext.segmentEnd || null,
           wayGeometry: roadContext.wayGeometry || null,
           segmentIndex: roadContext.segmentIndex ?? null,
-          allWays: roadContext.allWays || null,
           streetName: roadContext.streetName,
           signs: signLocations,
         };
@@ -2179,15 +2183,15 @@
         }
 
         const initialStore = appendSignMapDetection(detectionEntry);
-        renderSignMapData(initialStore);
+        await renderSignMapData(initialStore);
 
         hydrateDetectionPreviews(signLocations, detectedPanoId)
-          .then(() => {
+          .then(async () => {
             const hydratedStore = appendSignMapDetection({
               ...detectionEntry,
               signs: signLocations,
             });
-            renderSignMapData(hydratedStore);
+            await renderSignMapData(hydratedStore);
           })
           .catch((previewErr) => {
             console.warn("Sign preview hydration failed:", previewErr);
