@@ -408,6 +408,7 @@ function findIntersectionNodes(wayGeometry, allWays) {
 
     // Find real intersection nodes
     const intersectionNodes = [];
+    console.log(`[findIntersectionNodes] wayGeometry: ${wayGeometry.length} nodes, allWays: ${allWays.length} ways`);
     for (let nodeIdx = 0; nodeIdx < wayGeometry.length; nodeIdx++) {
         const node = wayGeometry[nodeIdx];
         const lat = node.lat;
@@ -416,9 +417,14 @@ function findIntersectionNodes(wayGeometry, allWays) {
 
         const key = `${lat.toFixed(PRECISION)},${lng.toFixed(PRECISION)}`;
         const wayInfos = coordKeyToWayInfos.get(key);
-        if (!wayInfos || wayInfos.length < 2) continue;
+        if (!wayInfos || wayInfos.length < 2) {
+            console.log(`  node[${nodeIdx}] (${lat.toFixed(6)}, ${lng.toFixed(6)}): ${wayInfos?.length ?? 0} ways → skip (not shared)`);
+            continue;
+        }
 
         const { isCrossing } = classifyCrossing(wayInfos);
+        const wayNames = wayInfos.map(i => i.way.tags?.name || '(unnamed)').join(', ');
+        console.log(`  node[${nodeIdx}] (${lat.toFixed(6)}, ${lng.toFixed(6)}): ${wayInfos.length} ways [${wayNames}] → isCrossing=${isCrossing}`);
         if (!isCrossing) continue;
 
         // Collect cross-street tags (ways whose direction differs from main way)
@@ -439,7 +445,7 @@ function findIntersectionNodes(wayGeometry, allWays) {
             });
         }
 
-        intersectionNodes.push({
+    intersectionNodes.push({
             lat,
             lng,
             nodeIndex: nodeIdx,
@@ -447,6 +453,7 @@ function findIntersectionNodes(wayGeometry, allWays) {
         });
     }
 
+    console.log(`[findIntersectionNodes] result: ${intersectionNodes.length} intersections`, intersectionNodes.map(n => `node[${n.nodeIndex}] (${n.lat.toFixed(6)}, ${n.lng.toFixed(6)}) crossStreetTags=${JSON.stringify(n.crossStreetTags)}`));
     return intersectionNodes;
 }
 

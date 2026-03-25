@@ -1170,6 +1170,7 @@
             typeof findIntersectionNodes === "function"
               ? findIntersectionNodes(wayGeometry, detectionAllWays)
               : [];
+          console.log(`[renderRuleCurves] detection: wayGeo=${wayGeometry?.length ?? 0} nodes, allWays=${detectionAllWays?.length ?? 0}, intersectionNodes=${detectionIntersectionNodes.length}`, detectionIntersectionNodes);
 
           for (const sign of detection.signs || []) {
             const ocrResult = sign.ocrResult;
@@ -1224,6 +1225,7 @@
                   winner.ruleIndex,
                   maxDist,
                 );
+                console.log(`[renderRuleCurves] sign=(${sign.lat.toFixed(6)},${sign.lng.toFixed(6)}) side=${signContext.side} arrowDir=${arrowDir} dir=${dir} → maxDist=${maxDist.toFixed(2)}m, curvePoints=${latLngs?.length ?? 0}`);
                 if (!latLngs?.length) continue;
 
                 const color = winner.isTowZone ? TOW_ZONE_COLOR : (RULE_CATEGORY_COLORS[winner.rule.category] || "#9ca3af");

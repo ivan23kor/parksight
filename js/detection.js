@@ -3772,22 +3772,36 @@ function findDistanceToNearestCorner(
   }
 
   const directionSign = direction * getWayTravelDirectionSign(sign, wayGeometry, anchor);
+  const travelDirSign = getWayTravelDirectionSign(sign, wayGeometry, anchor);
+  console.log(`[findDistanceToNearestCorner] signOffset=${signOffset.toFixed(2)}m, direction=${direction}, travelDirSign=${travelDirSign}, directionSign=${directionSign}, intersectionNodes=${(intersectionNodes || []).length}`);
   let nearestIntersection = Infinity;
 
   for (const node of intersectionNodes || []) {
-    if (!Number.isInteger(node?.nodeIndex)) continue;
+    if (!Number.isInteger(node?.nodeIndex)) {
+      console.log(`  skip node (no nodeIndex):`, node);
+      continue;
+    }
 
     const nodeOffset = getWayNodeOffsetMeters(wayGeometry, node.nodeIndex);
-    if (!Number.isFinite(nodeOffset)) continue;
+    if (!Number.isFinite(nodeOffset)) {
+      console.log(`  skip node[${node.nodeIndex}] (nodeOffset not finite)`);
+      continue;
+    }
 
     const signedDistance = nodeOffset - signOffset;
-    if (signedDistance * directionSign <= 0) continue;
+    if (signedDistance * directionSign <= 0) {
+      console.log(`  skip node[${node.nodeIndex}] @ offset=${nodeOffset.toFixed(2)}m: signedDist=${signedDistance.toFixed(2)}m is wrong direction (directionSign=${directionSign})`);
+      continue;
+    }
 
     const distanceMeters = Math.abs(signedDistance);
-    if (distanceMeters <= RULE_CURVE_INTERSECTION_SKIP_METERS) continue;
+    if (distanceMeters <= RULE_CURVE_INTERSECTION_SKIP_METERS) {
+      console.log(`  skip node[${node.nodeIndex}]: dist=${distanceMeters.toFixed(2)}m ≤ SKIP_METERS=${RULE_CURVE_INTERSECTION_SKIP_METERS}`);
+      continue;
+    }
 
     // Extend past the centerline node to the actual curb corner
-    // by adding the widest cross-street’s road-edge half-width.
+    // by adding the widest cross-street's road-edge half-width.
     let cornerExtension = 0;
     for (const tags of node.crossStreetTags || []) {
       const halfWidth = estimateRoadEdgeOffsetMeters(tags);
@@ -3795,22 +3809,27 @@ function findDistanceToNearestCorner(
     }
 
     const adjustedDistance = distanceMeters + cornerExtension;
+    console.log(`  node[${node.nodeIndex}] @ offset=${nodeOffset.toFixed(2)}m: centerlineDist=${distanceMeters.toFixed(2)}m + cornerExt=${cornerExtension.toFixed(2)}m = ${adjustedDistance.toFixed(2)}m`);
     if (adjustedDistance < nearestIntersection) {
       nearestIntersection = adjustedDistance;
     }
   }
 
   if (Number.isFinite(nearestIntersection)) {
+    console.log(`[findDistanceToNearestCorner] → ${nearestIntersection.toFixed(2)}m (intersection)`);
     return nearestIntersection;
   }
 
   const endpointIndex = directionSign > 0 ? wayGeometry.length - 1 : 0;
   const endpointOffset = getWayNodeOffsetMeters(wayGeometry, endpointIndex);
   if (!Number.isFinite(endpointOffset)) {
+    console.log(`[findDistanceToNearestCorner] → ${RULE_CURVE_DEFAULT_LENGTH_METERS}m (DEFAULT, endpoint offset not finite)`);
     return RULE_CURVE_DEFAULT_LENGTH_METERS;
   }
 
-  return Math.abs(endpointOffset - signOffset);
+  const endpointDist = Math.abs(endpointOffset - signOffset);
+  console.log(`[findDistanceToNearestCorner] → ${endpointDist.toFixed(2)}m (way endpoint, endpointOffset=${endpointOffset.toFixed(2)}m)`);
+  return endpointDist;
 }
 
 function findDistanceToNextSign(
