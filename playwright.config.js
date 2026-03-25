@@ -3,6 +3,12 @@ const { defineConfig } = require("@playwright/test");
 module.exports = defineConfig({
   testDir: "./tests",
   timeout: 30000,
+  projects: [
+    {
+      name: "chromium",
+      use: { browserName: "chromium" },
+    },
+  ],
   use: {
     baseURL: "http://127.0.0.1:8080",
     headless: process.env.HEADLESS !== "false", // Run headless by default, use HEADLESS=false for headed
