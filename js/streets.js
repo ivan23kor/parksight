@@ -10,12 +10,11 @@
  */
 async function fetchStreets(bounds) {
     const overpassQuery = `
-        [out:json][timeout:30];
+        [out:json][timeout:15];
         (
             way["highway"~"^(primary|secondary|tertiary|residential|unclassified)$"](${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()});
         );
-        (._;>;);
-        out geom;
+        out geom qt;
     `;
 
     let lastError;
