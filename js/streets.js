@@ -26,12 +26,21 @@ async function fetchStreets(bounds) {
             });
 
             if (!response.ok) {
+                if (response.status === 429) {
+                    // Rate limited: stop immediately, do NOT retry.
+                    // Every retry during the rate-limit window burns quota and
+                    // delays the next successful call. The burst test shows
+                    // ~4 requests are allowed before 429 kicks in.
+                    lastError = new Error(`Overpass API error: ${response.status}`);
+                    break;
+                }
                 if (response.status === 504 && attempt < 2) {
                     const delay = Math.pow(2, attempt) * 1000;
                     await new Promise(r => setTimeout(r, delay));
                     continue;
                 }
-                throw new Error(`Overpass API error: ${response.status}`);
+                lastError = new Error(`Overpass API error: ${response.status}`);
+                break;
             }
 
             const data = await response.json();
@@ -53,6 +62,7 @@ async function fetchStreets(bounds) {
             return ways;
 
         } catch (err) {
+            // Network-level error (no response): retry up to 3 times
             lastError = err;
             if (attempt < 2) continue;
         }
@@ -407,6 +417,7 @@ function findIntersectionNodes(wayGeometry, allWays) {
 
     // Find real intersection nodes
     const intersectionNodes = [];
+    const foundNodeIndices = new Set(); // Track which main-way node indices are already registered
     if (window.DEBUG_RULE_CURVES) console.log(`[findIntersectionNodes] wayGeometry: ${wayGeometry.length} nodes, allWays: ${allWays.length} ways`);
     for (let nodeIdx = 0; nodeIdx < wayGeometry.length; nodeIdx++) {
         const node = wayGeometry[nodeIdx];
@@ -451,14 +462,116 @@ function findIntersectionNodes(wayGeometry, allWays) {
             nodeIndex: nodeIdx,
             crossStreetTags,
         });
+        foundNodeIndices.add(nodeIdx);
+    }
+
+    // Second pass: geometric intersection detection via turf.lineIntersect.
+    // Catches intersections where OSM ways cross without sharing an exact node —
+    // the common case that caused curves to stop short of corners.
+    if (typeof turf !== 'undefined' && typeof turf.lineIntersect === 'function' && wayGeometry.length >= 2) {
+        try {
+            const mainLine = turf.lineString(
+                wayGeometry.map(n => [n.lon ?? n.lng, n.lat])
+            );
+
+            for (const crossWay of allWays) {
+                const crossNodes = crossWay.geometry || [];
+                if (crossNodes.length < 2) continue;
+
+                let crossLine;
+                try {
+                    crossLine = turf.lineString(crossNodes.map(n => [n.lon ?? n.lng, n.lat]));
+                } catch { continue; }
+
+                let crossings;
+                try {
+                    crossings = turf.lineIntersect(mainLine, crossLine);
+                } catch { continue; }
+
+                for (const feature of crossings.features || []) {
+                    const [crossLng, crossLat] = feature.geometry.coordinates;
+                    if (!Number.isFinite(crossLat) || !Number.isFinite(crossLng)) continue;
+
+                    // Snap crossing point to the nearest node in wayGeometry by angular distance
+                    let nearestIdx = 0;
+                    let nearestDistSq = Infinity;
+                    for (let i = 0; i < wayGeometry.length; i++) {
+                        const n = wayGeometry[i];
+                        const nLng = n.lon ?? n.lng;
+                        const dLat = n.lat - crossLat;
+                        const dLng = nLng - crossLng;
+                        const distSq = dLat * dLat + dLng * dLng;
+                        if (distSq < nearestDistSq) {
+                            nearestDistSq = distSq;
+                            nearestIdx = i;
+                        }
+                    }
+
+                    // Skip if this node was already registered via the shared-node pass
+                    if (foundNodeIndices.has(nearestIdx)) continue;
+
+                    // Find closest node on cross-way for accurate bearing in classifyCrossing
+                    let nearestCrossIdx = 0;
+                    let nearestCrossDistSq = Infinity;
+                    for (let i = 0; i < crossNodes.length; i++) {
+                        const n = crossNodes[i];
+                        const nLng = n.lon ?? n.lng;
+                        const dLat = n.lat - crossLat;
+                        const dLng = nLng - crossLng;
+                        const distSq = dLat * dLat + dLng * dLng;
+                        if (distSq < nearestCrossDistSq) {
+                            nearestCrossDistSq = distSq;
+                            nearestCrossIdx = i;
+                        }
+                    }
+
+                    const syntheticWayInfos = [
+                        { way: { geometry: wayGeometry, tags: {} }, nodeIndex: nearestIdx },
+                        { way: crossWay, nodeIndex: nearestCrossIdx },
+                    ];
+                    const { isCrossing } = classifyCrossing(syntheticWayInfos);
+                    if (window.DEBUG_RULE_CURVES) console.log(`  [geom] crossing at (${crossLat.toFixed(6)}, ${crossLng.toFixed(6)}) → snapped to node[${nearestIdx}], cross=[${crossWay.tags?.name || 'unnamed'}], isCrossing=${isCrossing}`);
+                    if (!isCrossing) continue;
+
+                    // Collect cross-street tags for corner-extension calculation
+                    const mainDir = streetDirectionAtNode({ geometry: wayGeometry }, nearestIdx);
+                    const crossDir = streetDirectionAtNode(crossWay, nearestCrossIdx);
+                    const crossStreetTags = [];
+                    const isAngled = mainDir === null || crossDir === null || (() => {
+                        const diff = Math.abs(mainDir - crossDir);
+                        return Math.min(diff, 180 - diff) > MIN_CROSSING_ANGLE_DEG;
+                    })();
+                    if (isAngled) {
+                        const tags = crossWay.tags || {};
+                        crossStreetTags.push({
+                            name: tags.name || null,
+                            highway: tags.highway || null,
+                            lanes: tags.lanes || null,
+                            oneway: tags.oneway || null,
+                        });
+                    }
+
+                    const snapNode = wayGeometry[nearestIdx];
+                    intersectionNodes.push({
+                        lat: snapNode.lat,
+                        lng: snapNode.lon ?? snapNode.lng,
+                        nodeIndex: nearestIdx,
+                        crossStreetTags,
+                    });
+                    foundNodeIndices.add(nearestIdx);
+                }
+            }
+        } catch (e) {
+            console.warn('[findIntersectionNodes] geometric pass failed:', e);
+        }
     }
 
     if (window.DEBUG_RULE_CURVES) console.log(`[findIntersectionNodes] result: ${intersectionNodes.length} intersections`, intersectionNodes.map(n => `node[${n.nodeIndex}] (${n.lat.toFixed(6)}, ${n.lng.toFixed(6)}) crossStreetTags=${JSON.stringify(n.crossStreetTags)}`));
     return intersectionNodes;
 }
 
-async function fetchNearestStreetContext(lat, lon, radiusMeters = 120) {
-    const ways = await fetchStreets(createBoundsAroundPoint(lat, lon, radiusMeters));
+async function fetchNearestStreetContext(lat, lon, allWays = null, radiusMeters = 120) {
+    const ways = allWays ?? await fetchStreets(createBoundsAroundPoint(lat, lon, radiusMeters));
     return findNearestStreetContext(lat, lon, ways);
 }
 

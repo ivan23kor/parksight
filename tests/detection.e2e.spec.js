@@ -130,6 +130,27 @@ window.turf = {
   },
   lineString(coordinates) { return { geometry: { type: "LineString", coordinates } }; },
   bboxClip(line) { return line; },
+  lineIntersect(line1, line2) {
+    const coords1 = line1.geometry.coordinates;
+    const coords2 = line2.geometry.coordinates;
+    const features = [];
+    for (let i = 0; i < coords1.length - 1; i++) {
+      for (let j = 0; j < coords2.length - 1; j++) {
+        const [px, py] = coords1[i], [qx, qy] = coords1[i + 1];
+        const [rx, ry] = coords2[j], [sx, sy] = coords2[j + 1];
+        const dx1 = qx - px, dy1 = qy - py;
+        const dx2 = sx - rx, dy2 = sy - ry;
+        const denom = dx1 * dy2 - dy1 * dx2;
+        if (Math.abs(denom) < 1e-12) continue;
+        const t = ((rx - px) * dy2 - (ry - py) * dx2) / denom;
+        const u = ((rx - px) * dy1 - (ry - py) * dx1) / denom;
+        if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+          features.push({ type: "Feature", geometry: { type: "Point", coordinates: [px + t * dx1, py + t * dy1] } });
+        }
+      }
+    }
+    return { type: "FeatureCollection", features };
+  },
 };
 `;
 
