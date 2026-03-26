@@ -99,6 +99,10 @@ Your entire response must conform exactly to this JSON structure:
 
 async function main() {
   const apiKey = process.env.CLI_PROXY_API_KEY;
+  if (!apiKey) {
+    console.error("CLI_PROXY_API_KEY not set");
+    process.exit(1);
+  }
 
   // Use provided path or find latest screenshot
   let screenshotPath = process.argv[2];

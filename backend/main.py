@@ -1207,7 +1207,7 @@ class OcrSignResponse(BaseModel):
 @app.post("/ocr-sign", response_model=OcrSignResponse)
 async def ocr_sign(request: OcrSignRequest):
     """
-    Parse parking sign text using vision LLM (gemini-3-flash-preview).
+    Parse parking sign text using vision LLM via CLI proxy (gemini-3-flash).
 
     Takes a base64-encoded cropped sign image and returns structured
     parking regulation data including rules, time limits, and payment info.
@@ -1220,25 +1220,34 @@ async def ocr_sign(request: OcrSignRequest):
 
     start_time = time.time()
 
-    gemini_api_key = os.environ.get("GEMINI_API_KEY")
-    if not gemini_api_key:
-        raise HTTPException(status_code=502, detail="GEMINI_API_KEY not configured")
+    # CLI proxy configuration
+    cli_proxy_url = os.environ.get("CLI_PROXY_URL", "http://localhost:8317")
+    cli_proxy_api_key = os.environ.get("CLI_PROXY_API_KEY", "sk-7f11f6be5a2e7908ed0550e01f4dc3fd2b781eb8455d8029")
+    cli_proxy_model = os.environ.get("CLI_PROXY_MODEL", "cli-proxy/gemini-3-flash")
+
+    # Build data URL for OpenAI-compatible format
+    data_url = f"data:{mime};base64,{request.image_base64}"
 
     max_retries = 3
     async with httpx.AsyncClient() as client:
         for attempt in range(max_retries):
             try:
                 resp = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={gemini_api_key}",
-                    headers={"Content-Type": "application/json"},
+                    f"{cli_proxy_url}/v1/chat/completions",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {cli_proxy_api_key}"
+                    },
                     json={
-                        "contents": [{
-                            "parts": [
-                                {"inline_data": {"mime_type": mime, "data": request.image_base64}},
-                                {"text": OCR_PROMPT}
+                        "model": cli_proxy_model,
+                        "messages": [{
+                            "role": "user",
+                            "content": [
+                                {"type": "image_url", "image_url": {"url": data_url}},
+                                {"type": "text", "text": OCR_PROMPT}
                             ]
                         }],
-                        "generationConfig": {"maxOutputTokens": 4096}
+                        "max_tokens": 4096
                     },
                     timeout=60.0
                 )
@@ -1256,11 +1265,11 @@ async def ocr_sign(request: OcrSignRequest):
 
     data = resp.json()
 
-    # Extract text from Gemini response format
+    # Extract text from OpenAI-compatible response format
     try:
-        content = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        content = data["choices"][0]["message"]["content"].strip()
     except (KeyError, IndexError, TypeError):
-        raise HTTPException(status_code=502, detail=f"Unexpected Gemini response format: {data}")
+        raise HTTPException(status_code=502, detail=f"Unexpected response format: {data}")
 
     # Parse JSON response
     try:
