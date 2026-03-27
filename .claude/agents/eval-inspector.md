@@ -48,6 +48,7 @@ Write all output to `evals/runs/<feature>/`:
   "steps_completed": <N>,
   "steps_total": <N>,
   "screenshots": ["01-step-name.png", "02-step-name.png"],
+  "video": "test-feature-name.webm",
   "extracted_data": {
     "<key>": "<value from page.evaluate()>"
   },
@@ -62,13 +63,21 @@ Write all output to `evals/runs/<feature>/`:
 - Saved to `evals/runs/<feature>/`
 - Full page screenshots unless the spec says otherwise
 
+### Video Recording
+- **Automatic.** Playwright records every test run as a video file (`.webm` format) in `evals/runs/<feature>/test-*.webm`
+- **Human-accessible.** Videos are stored for manual review — open in any video player
+- **Agent-accessible.** Videos are available for AI analysis, but ONLY when a human explicitly asks an agent to analyze them
+- **Never automatic.** Agents do not analyze videos as part of the standard eval pipeline. The evaluator only reads report.json and screenshots.
+
 ## Execution Pattern
 
 For each inspection, write a temporary Playwright test file and run it:
 
 ```bash
-HEADLESS=false bunx playwright test evals/runs/<feature>/inspect.spec.js
+RECORD_VIDEO=on bunx playwright test evals/runs/<feature>/inspect.spec.js
 ```
+
+This enables video recording (`.webm` format) of the test run. Videos are saved to `evals/runs/<feature>/` alongside screenshots and report.json.
 
 The test file should:
 1. Navigate to the app URL

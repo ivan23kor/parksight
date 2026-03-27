@@ -14,6 +14,7 @@ module.exports = defineConfig({
     headless: process.env.HEADLESS !== "false", // Run headless by default, use HEADLESS=false for headed
     viewport: { width: 1280, height: 720 },
     trace: "on", // Record trace for all tests (view with: npx playwright show-trace trace.zip)
+    video: process.env.RECORD_VIDEO === "on" ? "on" : "off", // Record video if RECORD_VIDEO=on (for eval inspector tests)
   },
   webServer: {
     command: "bun run serve",

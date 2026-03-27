@@ -99,6 +99,14 @@ After understanding the feature, produce two files.
 
 ## Screenshot assertions
 - <NN-name.png>: <what to check in this specific screenshot>
+
+## Notes on Videos
+
+Videos are recorded automatically but NOT analyzed by the evaluator as part of the standard pipeline. If you want video analysis included, you must:
+1. Reference the video file explicitly in an assertion (e.g., "Watch test-<feature>.webm and verify...")
+2. Ask a human to request an agent analyze the video
+
+This prevents self-praise bias: the evaluator judges based on structured data (report.json) and visual artifacts, not video narratives.
 ```
 
 ## Phase 3: Save Files

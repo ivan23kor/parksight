@@ -51,7 +51,10 @@ Check that `evals/runs/<feature-name>/report.json` exists. If not, report inspec
 Read and display a brief summary of the report:
 - Steps completed vs total
 - Screenshots taken
+- Video filename (e.g., `test-rule-curve-intersections.webm`)
 - Any errors encountered
+
+Note: Videos are recorded automatically but not analyzed by the evaluator unless explicitly requested by a human.
 
 ### Step 5: Run Evaluator
 
