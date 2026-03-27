@@ -47,6 +47,13 @@ python3 datasets/build_unified_dataset.py  # Build dataset
   - Check screenshots/videos if present
   - Report: confirmed issues, warnings, performance insights, hypotheses, recommendations
 
+## Eval Rules
+- Evals simulate real user behavior. No stubs, no mocks, no synthetic data injection.
+- `page.evaluate()` for reading state only — never for injecting data or bypassing UI flow.
+- Real API keys from env. Real backend. Real external APIs. Fail fast if missing.
+- Black/empty panels where real content should appear = eval is broken.
+- See `.claude/skills/write-eval-spec.md` for full eval philosophy.
+
 ## Architecture
 
 ### Static App (`index.html`)
