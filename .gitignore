@@ -44,3 +44,6 @@ test-results/
 
 # Playwright trace files
 *.trace
+
+# Eval run artifacts (ephemeral)
+evals/runs/
