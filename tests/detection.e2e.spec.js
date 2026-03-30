@@ -199,6 +199,10 @@ async function mockInfrastructure(page, options = {}) {
     const resp = typeof detectPanoramaResponse === "function" ? detectPanoramaResponse(r.request()) : detectPanoramaResponse;
     await r.fulfill({ status: resp.status, contentType: resp.contentType || "application/json", body: resp.body });
   });
+  await page.route("http://127.0.0.1:8000/detect-single-pano", async (r) => {
+    const resp = typeof detectPanoramaResponse === "function" ? detectPanoramaResponse(r.request()) : detectPanoramaResponse;
+    await r.fulfill({ status: resp.status, contentType: resp.contentType || "application/json", body: resp.body });
+  });
   await page.route("http://127.0.0.1:8000/detect", async (r) => {
     const resp = typeof detectResponse === "function" ? detectResponse(r.request()) : detectResponse;
     await r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(resp) });
@@ -238,6 +242,17 @@ function distanceToPolylineMeters(point, wayGeometry) {
   }
   return best;
 }
+
+const ANGULAR_DETECTIONS_RESPONSE = {
+  status: 200,
+  body: JSON.stringify({
+    detections: [
+      { heading: 47, pitch: -4.2, angular_width: 0.8, angular_height: 4.0, confidence: 0.87, class_name: "parking_sign", depth_anything_meters: 15.2, depth_anything_meters_raw: 15.0 },
+      { heading: 61, pitch: -3.1, angular_width: 0.7, angular_height: 3.0, confidence: 0.81, class_name: "parking_sign", depth_anything_meters: 12.8, depth_anything_meters_raw: 12.5 },
+    ],
+    total_inference_time_ms: 55, slices_count: 3,
+  }),
+};
 
 // ─── Tests ─────────────────────────────────────────────────────────────
 
@@ -343,7 +358,7 @@ test.describe("detection flow (real OSM data)", () => {
   });
 
   test("falls back to single-view detection on real Vassar Street", async ({ page }) => {
-    await mockInfrastructure(page);
+    await mockInfrastructure(page, { detectPanoramaResponse: ANGULAR_DETECTIONS_RESPONSE });
     await page.addInitScript(() => { window.__TEST_PANORAMA_POSITION = { lat: 42.3614859, lng: -71.0921589 }; });
     await page.goto("/?api_key=test-key");
 
@@ -358,7 +373,7 @@ test.describe("detection flow (real OSM data)", () => {
       showDetectionForIndex(0);
     }, { segStart: VASSAR_SEG_START, segEnd: VASSAR_SEG_END });
 
-    await page.locator("#detectionStatus").click();
+    await page.locator("#detectSingleBtn").click();
     await expect(page.locator("#detectionStatus")).toContainText("Found 2 sign(s)", { timeout: 10000 });
 
     const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("parksight_latest_sign_map_data")));
@@ -367,7 +382,7 @@ test.describe("detection flow (real OSM data)", () => {
   });
 
   test("renders dashed road marker on real Vassar Street geometry", async ({ page }) => {
-    await mockInfrastructure(page);
+    await mockInfrastructure(page, { detectPanoramaResponse: ANGULAR_DETECTIONS_RESPONSE });
     await page.addInitScript(() => { window.__TEST_PANORAMA_POSITION = { lat: 42.3614859, lng: -71.0921589 }; });
     await page.goto("/?api_key=test-key");
 
@@ -382,7 +397,7 @@ test.describe("detection flow (real OSM data)", () => {
       showDetectionForIndex(0);
     }, { segStart: VASSAR_SEG_START, segEnd: VASSAR_SEG_END });
 
-    await page.locator("#detectionStatus").click();
+    await page.locator("#detectSingleBtn").click();
     await expect(page.locator("#detectionStatus")).toContainText("Found 2 sign(s)", { timeout: 10000 });
 
     const roadMarkers = await page.evaluate(() =>
@@ -411,7 +426,7 @@ test.describe("detection flow (real OSM data)", () => {
       });
     }, { vassarGeo: VASSAR_WAY.geometry, segStart: VASSAR_SEG_START, segEnd: VASSAR_SEG_END, allWays: fixtureWays });
 
-    await page.locator("#detectionStatus").click();
+    await page.locator("#detectSingleBtn").click();
     await expect(page.locator("#detectionStatus")).toContainText("Found 2 sign(s)", { timeout: 10000 });
 
     const roadMarkers = await page.evaluate(() =>
@@ -519,7 +534,7 @@ test.describe("detection flow (real OSM data)", () => {
       showDetectionForIndex(0);
     }, { vassarGeo: VASSAR_WAY.geometry, segStart: VASSAR_SEG_START, segEnd: VASSAR_SEG_END, allWays: fixtureWays });
 
-    await page.locator("#detectionStatus").click();
+    await page.locator("#detectSahiBtn").click();
     await expect(page.locator("#detectionStatus")).toContainText("Found 2 sign(s)", { timeout: 10000 });
 
     const projection = await page.evaluate(() => JSON.parse(localStorage.getItem("parksight_latest_sign_map_data")));
