@@ -246,6 +246,17 @@ class AngularDetection(BaseModel):
     size_correction: Optional[float] = None
 
 
+class SinglePanoRequest(BaseModel):
+    pano_id: str
+    heading: float
+    pitch: float = 0.0
+    fov: float = 90.0
+    confidence: float = 0.15
+    api_key: str
+    img_width: int = 640
+    img_height: int = 640
+
+
 class SahiRequest(BaseModel):
     pano_id: str
     heading: float
@@ -1119,6 +1130,132 @@ async def detect_panorama(request: SahiRequest):
 async def detect_sahi(request: SahiRequest):
     """Compatibility alias for the panorama detection endpoint."""
     return await detect_panorama_impl(request)
+
+
+async def detect_single_pano_impl(request: SinglePanoRequest) -> SahiResponse:
+    """Single-image panorama detection: 1 fetch, 1 YOLO, 1 depth, no slicing/NMS."""
+    t_start = time.time()
+
+    # Fetch one Street View image
+    t_fetch_start = time.time()
+    url = build_streetview_url(
+        request.pano_id, request.heading, request.pitch, request.fov,
+        request.img_width, request.img_height, request.api_key
+    )
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, timeout=10.0)
+        resp.raise_for_status()
+        image_bytes = resp.content
+    t_fetch = (time.time() - t_fetch_start) * 1000
+
+    image = Image.open(io.BytesIO(image_bytes))
+    img_w, img_h = image.size
+
+    # YOLO inference
+    t_yolo_start = time.time()
+    yolo_results = model.predict(image, conf=request.confidence, imgsz=512, verbose=False)
+    t_yolo = (time.time() - t_yolo_start) * 1000
+    yolo_speed = yolo_results[0].speed if yolo_results else {}
+
+    # Depth estimation (only if detections found)
+    has_dets = any(r.boxes is not None and len(r.boxes) > 0 for r in yolo_results)
+    depth_tensor = None
+    t_depth = 0.0
+    if has_dets:
+        try:
+            depth_start = time.time()
+            depth_result = depth_model(image)
+            depth_tensor = depth_result["predicted_depth"]
+            t_depth = (time.time() - depth_start) * 1000
+        except Exception as e:
+            print(f"Single-pano detect: depth estimation failed: {e}")
+
+    # Convert detections to angular coordinates
+    angular_dets: list[AngularDetection] = []
+    for r in yolo_results:
+        if r.boxes is None:
+            continue
+        for box in r.boxes:
+            x1, y1, x2, y2 = map(float, box.xyxy[0].tolist())
+            conf = float(box.conf[0])
+            cls_name = model.names[int(box.cls[0])]
+            cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+
+            det_depth_m_raw = None
+            det_depth_m = None
+            if depth_tensor is not None:
+                try:
+                    depth_arr = depth_tensor.cpu().numpy() if torch.is_tensor(depth_tensor) else np.array(depth_tensor)
+                    px_x = int(min(max(cx, 0), depth_arr.shape[1] - 1))
+                    px_y = int(min(max(cy, 0), depth_arr.shape[0] - 1))
+                    det_depth_m_raw = float(depth_arr[px_y, px_x])
+                except Exception as e:
+                    print(f"Single-pano detect: depth sampling failed: {e}")
+
+            center_heading, center_pitch = pixel_to_angular(
+                cx, cy, request.heading, request.pitch,
+                request.fov, img_w, img_h
+            )
+            tl_h, tl_p = pixel_to_angular(x1, y1, request.heading, request.pitch, request.fov, img_w, img_h)
+            tr_h, tr_p = pixel_to_angular(x2, y1, request.heading, request.pitch, request.fov, img_w, img_h)
+            bl_h, bl_p = pixel_to_angular(x1, y2, request.heading, request.pitch, request.fov, img_w, img_h)
+            br_h, br_p = pixel_to_angular(x2, y2, request.heading, request.pitch, request.fov, img_w, img_h)
+
+            top_w = tr_h - tl_h
+            if top_w > 180: top_w -= 360
+            if top_w < -180: top_w += 360
+            bot_w = br_h - bl_h
+            if bot_w > 180: bot_w -= 360
+            if bot_w < -180: bot_w += 360
+            ang_w = abs((top_w + bot_w) / 2)
+            ang_h = abs(((tl_p - bl_p) + (tr_p - br_p)) / 2)
+
+            inferred_height_cm, panel_layout = infer_sign_cluster_height(ang_h, ang_w, source_detections_count=1)
+            reference_height_m = inferred_height_cm / 100.0
+            pixel_size = int(max(x2 - x1, y2 - y1))
+            depth_calibrated = None
+
+            if det_depth_m_raw is not None and ang_h > 0:
+                ang_h_rad = math.radians(ang_h)
+                estimated_height_m = 2 * det_depth_m_raw * math.tan(ang_h_rad / 2)
+                if estimated_height_m > 0:
+                    scale_factor = reference_height_m / estimated_height_m
+                    det_depth_m = det_depth_m_raw * scale_factor
+                    depth_calibrated = det_depth_m
+                    pitch_rad = math.radians(center_pitch)
+                    det_depth_m = det_depth_m * math.cos(pitch_rad)
+                    if depth_calibrated:
+                        depth_calibrated = depth_calibrated * math.cos(pitch_rad)
+
+            angular_dets.append(AngularDetection(
+                heading=center_heading, pitch=center_pitch,
+                angular_width=ang_w, angular_height=ang_h,
+                confidence=conf, class_name=cls_name,
+                depth_anything_meters=det_depth_m,
+                depth_anything_meters_raw=det_depth_m_raw,
+                inferred_panel_layout=panel_layout,
+                reference_height_cm=inferred_height_cm,
+                depth_calibrated=depth_calibrated,
+                pixel_size=pixel_size, size_correction=None,
+            ))
+
+    t_total = (time.time() - t_start) * 1000
+    print(f"PROFILE /detect-single-pano: fetch={t_fetch:.0f}ms yolo={t_yolo:.0f}ms "
+          f"(preproc={yolo_speed.get('preprocess', 0):.0f}ms infer={yolo_speed.get('inference', 0):.0f}ms "
+          f"postproc={yolo_speed.get('postprocess', 0):.0f}ms) depth={t_depth:.0f}ms "
+          f"dets={len(angular_dets)} total={t_total:.0f}ms")
+
+    return SahiResponse(
+        detections=angular_dets,
+        total_inference_time_ms=round(t_yolo + t_depth, 1),
+        slices_count=1,
+    )
+
+
+@app.post("/detect-single-pano", response_model=SahiResponse)
+async def detect_single_pano(request: SinglePanoRequest):
+    """Single-image detection: no SAHI slicing, faster but lower resolution."""
+    return await detect_single_pano_impl(request)
 
 
 # OCR prompt for parking sign parsing

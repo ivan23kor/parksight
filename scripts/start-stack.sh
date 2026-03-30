@@ -42,7 +42,7 @@ ensure_backend_env() {
 
 wait_for_backend() {
   local health_url="http://127.0.0.1:${BACKEND_PORT}/health"
-  local max_attempts=60
+  local max_attempts=26
   local attempt=1
 
   while [ "$attempt" -le "$max_attempts" ]; do

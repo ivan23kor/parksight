@@ -996,6 +996,7 @@ function drawOcrTextOnOverlay(overlay, x, y, width, height, ocrResult, overlayHe
   const lines = [];
   for (let i = 0; i < Math.min(3, ocrResult.rules.length); i++) {
     const rule = ocrResult.rules[i];
+    if (!rule.category) continue;
     let text = rule.category.replace(/_/g, " ").toUpperCase();
     if (rule.time_limit_minutes) text += ` ${rule.time_limit_minutes}m`;
     lines.push(text);
@@ -1140,15 +1141,19 @@ function updateDetectionOverlay() {
 
     // Draw OCR text if available
     if (det.ocrResult?.is_parking_sign) {
-      drawOcrTextOnOverlay(
-        overlay,
-        screen.x,
-        screen.y,
-        screen.width,
-        screen.height,
-        det.ocrResult,
-        height
-      );
+      try {
+        drawOcrTextOnOverlay(
+          overlay,
+          screen.x,
+          screen.y,
+          screen.width,
+          screen.height,
+          det.ocrResult,
+          height
+        );
+      } catch (e) {
+        console.warn("drawOcrTextOnOverlay failed:", e);
+      }
     }
 
     // Create label — show depth, physical size, aspect ratio
@@ -1433,6 +1438,50 @@ function clearDetections() {
 }
 
 /**
+ * Run single-pano detection (no SAHI slicing).
+ */
+async function runSinglePanoApiDetection(panoId, heading, pitch, fov, statusEl) {
+  const apiUrl = window.DETECTION_CONFIG?.API_URL;
+  const apiKey = window.GOOGLE_CONFIG?.API_KEY;
+  if (!apiUrl || !apiKey) {
+    throw new Error("Detection API or Google API key not configured");
+  }
+
+  const conf = window.DETECTION_CONFIG?.CONFIDENCE_THRESHOLD ?? 0.15;
+
+  if (statusEl)
+    statusEl.textContent = "Detecting parking signs (single pano)...";
+
+  let resp;
+  try {
+    resp = await fetch(`${apiUrl}/detect-single-pano`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        pano_id: panoId,
+        heading: heading,
+        pitch: pitch,
+        fov: fov,
+        confidence: conf,
+        api_key: apiKey,
+        img_width: 640,
+        img_height: 640,
+      }),
+    });
+  } catch (err) {
+    console.error("Single-pano detection request failed:", err);
+    throw new Error("Can't reach detection API. Make sure backend is running.");
+  }
+
+  if (!resp.ok) {
+    const errorText = await resp.text();
+    throw new Error(`Single-pano detection failed: ${resp.status} - ${errorText}`);
+  }
+
+  return resp.json();
+}
+
+/**
  * Run the backend's panorama detection pipeline.
  * The backend may use multi-slice inference internally.
  */
@@ -1515,33 +1564,19 @@ async function runSingleViewPanoramaDetection(
 
 /**
  * Run detection and display results on panorama.
- * @param {boolean} preferPanoramaDetection - Prefer the backend's multi-slice panorama detector
+ * @param {"single"|"sahi"} mode - "single" for single-pano, "sahi" for multi-slice SAHI
  */
 async function runDetectionOnPanorama(
   panoId,
   heading,
   statusEl,
   useCurrentPov = false,
-  preferPanoramaDetection = true,
+  mode = "sahi",
 ) {
   let fov = 90;
   let pitch = PANORAMA_DEFAULTS.pitch;
   let detectHeading = heading;
   let detectPanoId = panoId;
-
-  const container = document.getElementById("detectionPanorama");
-  const screenWidth = container?.clientWidth || 1920;
-  const screenHeight = container?.clientHeight || 1080;
-  const aspectRatio = screenWidth / screenHeight;
-
-  let imgWidth, imgHeight;
-  if (aspectRatio >= 1) {
-    imgWidth = 640;
-    imgHeight = Math.round(640 / aspectRatio);
-  } else {
-    imgHeight = 640;
-    imgWidth = Math.round(640 * aspectRatio);
-  }
 
   if (useCurrentPov && detectionPanorama) {
     const pov = detectionPanorama.getPov();
@@ -1556,66 +1591,39 @@ async function runDetectionOnPanorama(
     }
   }
 
-  if (statusEl) statusEl.textContent = "Detecting parking signs...";
-
   try {
-    let result = null;
-    let detectionMode = "single-view";
+    let result;
+    let detectionMode;
 
-    if (preferPanoramaDetection) {
-      try {
-        result = await runPanoramaDetection(
-          detectPanoId,
-          detectHeading,
-          pitch,
-          fov,
-          statusEl,
-        );
-        detectionMode = "multi-slice";
-      } catch (err) {
-        console.warn(
-          "Panorama detection unavailable, falling back to single-view detection:",
-          err,
-        );
-        if (statusEl) {
-          statusEl.textContent =
-            "Panorama detector unavailable. Falling back to single-view detection...";
-        }
-      }
-    }
-
-    if (!result) {
-      result = await runSingleViewPanoramaDetection(
-        detectPanoId,
-        detectHeading,
-        pitch,
-        fov,
-        imgWidth,
-        imgHeight,
+    if (mode === "single") {
+      result = await runSinglePanoApiDetection(
+        detectPanoId, detectHeading, pitch, fov, statusEl,
       );
-      detectionMode = "single-view";
+      detectionMode = "single-pano";
+    } else {
+      result = await runPanoramaDetection(
+        detectPanoId, detectHeading, pitch, fov, statusEl,
+      );
+      detectionMode = "multi-slice";
     }
 
-    currentDetections =
-      detectionMode === "multi-slice"
-        ? clusterAngularDetections(
-            result.detections.map((det) => ({
-              heading: det.heading,
-              pitch: det.pitch,
-              angularWidth: det.angular_width,
-              angularHeight: det.angular_height,
-              confidence: det.confidence,
-              class_name: det.class_name,
-              depthAnythingMeters: det.depth_anything_meters,
-              depthAnythingMetersRaw: det.depth_anything_meters_raw,
-              depthCalibrated: det.depth_calibrated,
-              inferredPanelLayout: det.inferred_panel_layout,
-              referenceHeightCm: det.reference_height_cm,
-              pixelSize: det.pixel_size,
-              sizeCorrection: det.size_correction,
-            })),
-          )
-        : result.detections;
+    currentDetections = clusterAngularDetections(
+      result.detections.map((det) => ({
+        heading: det.heading,
+        pitch: det.pitch,
+        angularWidth: det.angular_width,
+        angularHeight: det.angular_height,
+        confidence: det.confidence,
+        class_name: det.class_name,
+        depthAnythingMeters: det.depth_anything_meters,
+        depthAnythingMetersRaw: det.depth_anything_meters_raw,
+        depthCalibrated: det.depth_calibrated,
+        inferredPanelLayout: det.inferred_panel_layout,
+        referenceHeightCm: det.reference_height_cm,
+        pixelSize: det.pixel_size,
+        sizeCorrection: det.size_correction,
+      })),
+    );
 
     detectionPov = { heading: detectHeading, pitch, fov };
     updateDetectionOverlay();
@@ -1625,7 +1633,7 @@ async function runDetectionOnPanorama(
     const modeSummary =
       detectionMode === "multi-slice"
         ? `${result.slices_count} slices`
-        : "single view";
+        : "single pano";
 
     // Run OCR on all detections (async, non-blocking)
     if (count > 0) {

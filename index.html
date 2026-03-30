@@ -71,34 +71,40 @@
         background: #005a87;
       }
 
-      #detectionControls {
+      #detectionButtons {
         position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        z-index: 2001;
-        padding: 16px;
-        display: none;
-        gap: 8px;
-      }
-
-      #detectionControls.visible {
+        bottom: 56px;
+        left: 20px;
+        z-index: 101;
         display: flex;
+        gap: 6px;
+        max-width: calc(100% - 32px);
       }
 
-      #detectionControls button {
-        flex: 1;
-        background: rgba(255, 255, 255, 0.92);
-        color: #333;
+      #detectionButtons button {
+        background: rgba(0, 0, 0, 0.7);
+        color: white;
         border: none;
-        padding: 12px 16px;
-        border-radius: 8px;
+        padding: 8px 16px;
+        border-radius: 4px;
         cursor: pointer;
         font-size: 14px;
+        user-select: none;
+        transition: background 0.2s ease;
+        white-space: nowrap;
       }
 
-      #detectionControls button:hover {
-        background: white;
+      #detectionButtons button:hover {
+        background: rgba(0, 0, 0, 0.9);
+      }
+
+      #detectionButtons button:active {
+        background: rgba(30, 64, 175, 0.9);
+      }
+
+      #detectionButtons button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
       }
 
       #detectionPanorama {
@@ -162,27 +168,16 @@
 
       #detectionStatus {
         position: absolute;
-        bottom: 56px;
+        bottom: 100px;
         left: 20px;
         color: white;
-        font-size: 16px;
-        text-align: center;
-        background: rgba(0, 0, 0, 0.7);
-        padding: 8px 16px;
+        font-size: 13px;
+        background: rgba(0, 0, 0, 0.6);
+        padding: 6px 12px;
         border-radius: 4px;
         z-index: 101;
         max-width: calc(100% - 32px);
-        cursor: pointer;
-        user-select: none;
-        transition: background 0.2s ease;
-      }
-
-      #detectionStatus:hover {
-        background: rgba(0, 0, 0, 0.9);
-      }
-
-      #detectionStatus:active {
-        background: rgba(30, 64, 175, 0.9);
+        pointer-events: none;
       }
 
       .sign-marker-icon {
@@ -367,10 +362,6 @@
           border-right: none;
           border-bottom: 1px solid rgba(255, 255, 255, 0.08);
         }
-
-        #detectionControls {
-          right: 16px;
-        }
       }
     </style>
   </head>
@@ -380,12 +371,13 @@
         <button id="togglePanoramaBackgroundBtn" type="button">
           Black background
         </button>
-        <div id="detectionControls">
-          <button id="redetectBtn">Detect</button>
-        </div>
         <div id="detectionPanorama"></div>
         <svg id="detectionOverlay"></svg>
-        <div id="detectionStatus">Tap to detect...</div>
+        <div id="detectionStatus"></div>
+        <div id="detectionButtons">
+          <button id="detectSingleBtn">Detect (single)</button>
+          <button id="detectSahiBtn">Detect (SAHI)</button>
+        </div>
         <div id="detectionInfo"></div>
       </section>
 
@@ -1956,14 +1948,14 @@
 
         // Detection pane controls
         document
-          .getElementById("detectionStatus")
-          .addEventListener("click", rerunDetection);
+          .getElementById("detectSingleBtn")
+          .addEventListener("click", () => rerunDetection("single"));
+        document
+          .getElementById("detectSahiBtn")
+          .addEventListener("click", () => rerunDetection("sahi"));
         document
           .getElementById("clearProjectedSignsBtn")
           .addEventListener("click", clearProjectedSigns);
-        document
-          .getElementById("redetectBtn")
-          .addEventListener("click", rerunDetection);
 
         // Click map to open closest panorama
         map.on("click", async (e) => {
@@ -2127,8 +2119,13 @@
       /**
        * Re-run detection at current panorama POV (visible area only).
        */
-      async function rerunDetection() {
+      async function rerunDetection(mode = "sahi") {
         if (!currentDetectionContext || !detectionPanorama) return;
+
+        const singleBtn = document.getElementById("detectSingleBtn");
+        const sahiBtn = document.getElementById("detectSahiBtn");
+        singleBtn.disabled = true;
+        sahiBtn.disabled = true;
 
         // Single Overpass fetch for the entire visible map area.
         // This is reused by road-context lookup and curve rendering below,
@@ -2168,7 +2165,7 @@
 
         try {
           // Use current POV (heading, pitch, zoom/FOV) for detection
-          await runDetectionOnPanorama(panoId, null, statusEl, true, true);
+          await runDetectionOnPanorama(panoId, null, statusEl, true, mode);
 
           // Project detected signs onto the map
           console.log(
@@ -2192,6 +2189,9 @@
         } catch (err) {
           console.error("Re-detection failed:", err);
           statusEl.textContent = "Detection failed.";
+        } finally {
+          singleBtn.disabled = false;
+          sahiBtn.disabled = false;
         }
       }
 
@@ -2289,9 +2289,7 @@
         if (typeof syncPanoramaCaptureSpotsOnMap === "function") {
           syncPanoramaCaptureSpotsOnMap();
         }
-        statusEl.textContent = `Tap to detect (heading: ${Math.round(currentDetectionContext.heading)}°)`;
-        const controls = document.getElementById("detectionControls");
-        if (controls) controls.classList.add("visible");
+        statusEl.textContent = `Heading: ${Math.round(currentDetectionContext.heading)}°`;
       }
 
       // ── Consolidated state dump ──
