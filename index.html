@@ -1874,9 +1874,9 @@
         });
 
         window.addEventListener("ocr-complete", () => {
-          // Attach OCR results from currentDetections to the persisted sign map data
-          if (!currentDetections.length || !currentDetections[0]?.ocrResult) return;
-          const ocrResult = currentDetections[0].ocrResult;
+          // Attach per-cluster OCR results to the persisted sign map data.
+          // Each sign is matched to the closest detection cluster by heading.
+          if (!currentDetections.length || !currentDetections.some(det => det.ocrResult)) return;
 
           const panoId = typeof detectionPanorama?.getPano === "function"
             ? detectionPanorama.getPano()
@@ -1888,7 +1888,16 @@
           if (!detection?.signs?.length) return;
 
           for (const sign of detection.signs) {
-            sign.ocrResult = ocrResult;
+            let best = null, minDelta = Infinity;
+            currentDetections.forEach(det => {
+              if (!det.ocrResult) return;
+              const d = Math.abs(signedAngleDeltaDegrees(det.heading, sign.heading));
+              if (d < minDelta) { minDelta = d; best = det; }
+            });
+            // Don't downgrade a confirmed positive result to a negative one
+            if (best && (!sign.ocrResult?.is_parking_sign || best.ocrResult.is_parking_sign)) {
+              sign.ocrResult = best.ocrResult;
+            }
           }
 
           const updatedStore = appendSignMapDetection(detection);
