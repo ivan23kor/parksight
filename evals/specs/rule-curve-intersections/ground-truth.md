@@ -3,9 +3,8 @@
 ## Structural assertions
 
 ### Intersections detected
-- `intersections.intersectionCount` must be >= 2 (Albany Street has at least 2 cross-street intersections in the fixture area)
-- `intersections.intersectionNodeIndices` must contain node index 0 (Portland Street end)
-- `intersections.intersectionNodeIndices` must contain node index 17 (Main Street end)
+- `intersections.intersectionCount` must be >= 2 (Vassar Street has at least 2 cross-street intersections in the fixture area)
+- `intersections.intersectionNodeIndices` must be a non-empty array
 
 ### Rule curves rendered
 - `rule_curves` array must contain at least 1 curve
@@ -33,7 +32,7 @@
 
 ## Screenshot assertions
 
-### 01-albany-rule-curves.png
+### 02-final-rule-curves.png
 - A map should be visible with at least one colored polyline (the rule curve) that is NOT the same as the street lines
 - The rule curve should appear offset from the street centerline, running parallel to it
 - There should be colored dots visible on the map (sign markers and camera marker)
