@@ -1201,6 +1201,10 @@
 
         // Cache intersection nodes per wayGeometry reference
         const intersectionCache = new Map();
+        // Cache extendWayGeometry results keyed by rawWayGeo reference.
+        // Ensures all signs sharing the same detection.wayGeometry get the same
+        // extended object, keeping intersectionCache hits and streetId matching intact.
+        const extendedGeoCache = new Map();
 
         for (const detection of data?.detections || []) {
           const wayGeometry = detection.wayGeometry;
@@ -1209,7 +1213,13 @@
             const ocrResult = sign.ocrResult;
             if (!ocrResult?.is_parking_sign) continue;
 
-            const signWayGeo = wayGeometry || sign.wayGeometry;
+            const rawWayGeo = wayGeometry || sign.wayGeometry;
+            const signWayGeo = (() => {
+              if (extendedGeoCache.has(rawWayGeo)) return extendedGeoCache.get(rawWayGeo);
+              const ext = extendWayGeometry(rawWayGeo, renderAllWays, 300, detection.streetName ?? null);
+              extendedGeoCache.set(rawWayGeo, ext);
+              return ext;
+            })();
             const signContext = {
               ...sign,
               wayGeometry: signWayGeo,

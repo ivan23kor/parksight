@@ -570,6 +570,195 @@ function findIntersectionNodes(wayGeometry, allWays) {
     return intersectionNodes;
 }
 
+/**
+ * Extend wayGeometry by walking connected same-name OSM ways in both directions.
+ * Solves the problem where a sign's single OSM segment has no cross-street nodes
+ * (they exist on adjacent same-name segments). After extension, findIntersectionNodes
+ * finds the real corners and rule curves stop at the correct intersection.
+ *
+ * @param {Array} wayGeo - Original way geometry [{lat, lon/lng}, ...]
+ * @param {Array} allWays - All ways in the area [{geometry, tags}, ...]
+ * @param {number} maxExtendMeters - Max extension distance in each direction (default 300m)
+ * @param {string|null} streetName - Street name; if null, resolved via coordinate lookup
+ * @returns {Array} Extended geometry (original reference returned if no extension needed)
+ */
+function extendWayGeometry(wayGeo, allWays, maxExtendMeters = 300, streetName = null) {
+    if (!wayGeo || wayGeo.length < 2 || !allWays || allWays.length === 0) return wayGeo;
+
+    const PRECISION = 5;
+
+    function nKey(node) {
+        const lng = node.lon ?? node.lng;
+        return `${node.lat.toFixed(PRECISION)},${lng.toFixed(PRECISION)}`;
+    }
+
+    function segLen(nodes) {
+        let total = 0;
+        for (let i = 0; i < nodes.length - 1; i++) {
+            const a = nodes[i], b = nodes[i + 1];
+            const aLng = a.lon ?? a.lng, bLng = b.lon ?? b.lng;
+            const dLat = (b.lat - a.lat) * 111320;
+            const dLng = (bLng - aLng) * 111320 * Math.cos(a.lat * Math.PI / 180);
+            total += Math.sqrt(dLat * dLat + dLng * dLng);
+        }
+        return total;
+    }
+
+    // Resolve street name by matching allWays on first+last node coordinate pair
+    if (!streetName) {
+        const fk = nKey(wayGeo[0]);
+        const lk = nKey(wayGeo[wayGeo.length - 1]);
+        for (const way of allWays) {
+            if (!way.tags?.name) continue;
+            const nodes = way.geometry || [];
+            if (nodes.length < 2) continue;
+            const wfk = nKey(nodes[0]);
+            const wlk = nKey(nodes[nodes.length - 1]);
+            if ((wfk === fk && wlk === lk) || (wfk === lk && wlk === fk)) {
+                streetName = way.tags.name;
+                break;
+            }
+        }
+    }
+
+    if (!streetName) {
+        if (window.DEBUG_RULE_CURVES) console.log('[extendWayGeometry] no street name found, returning unchanged');
+        return wayGeo;
+    }
+
+    const sameNameWays = allWays.filter(w => w.tags?.name === streetName);
+    if (sameNameWays.length <= 1) return wayGeo;
+
+    // Build coord → Set<name> map for cross-street detection (named ways only)
+    const coordNames = new Map();
+    for (const way of allWays) {
+        const name = way.tags?.name;
+        if (!name) continue;
+        for (const node of way.geometry || []) {
+            const key = nKey(node);
+            if (!coordNames.has(key)) coordNames.set(key, new Set());
+            coordNames.get(key).add(name);
+        }
+    }
+
+    // A node has a cross-street if it appears in any differently-named way
+    function hasCrossStreet(key) {
+        const names = coordNames.get(key);
+        if (!names) return false;
+        for (const name of names) {
+            if (name !== streetName) return true;
+        }
+        return false;
+    }
+
+    // Build endpoint key → [way] map for efficient neighbor lookup
+    const endpointMap = new Map();
+    for (const way of sameNameWays) {
+        const nodes = way.geometry || [];
+        if (nodes.length < 2) continue;
+        for (const endNode of [nodes[0], nodes[nodes.length - 1]]) {
+            const key = nKey(endNode);
+            if (!endpointMap.has(key)) endpointMap.set(key, []);
+            endpointMap.get(key).push(way);
+        }
+    }
+
+    // Way identity key for visited tracking
+    function wayKey(way) {
+        const nodes = way.geometry || [];
+        if (nodes.length < 2) return String(way.id ?? '');
+        return way.id != null ? String(way.id) : `${nKey(nodes[0])}|${nKey(nodes[nodes.length - 1])}`;
+    }
+
+    // Mark the original way as visited (match by first+last node coords)
+    const visited = new Set();
+    const origFk = nKey(wayGeo[0]);
+    const origLk = nKey(wayGeo[wayGeo.length - 1]);
+    for (const way of sameNameWays) {
+        const nodes = way.geometry || [];
+        if (nodes.length < 2) continue;
+        const wfk = nKey(nodes[0]);
+        const wlk = nKey(nodes[nodes.length - 1]);
+        if ((wfk === origFk && wlk === origLk) || (wfk === origLk && wlk === origFk)) {
+            visited.add(wayKey(way));
+        }
+    }
+
+    let prepended = [];
+    let appended = [];
+
+    // Walk forward from wayGeo's last node
+    let fwdKey = origLk;
+    let fwdDist = 0;
+    while (fwdDist < maxExtendMeters) {
+        // Stop if current endpoint is already a cross-street intersection
+        // (it's already in our geometry as the last node)
+        if (hasCrossStreet(fwdKey)) {
+            if (window.DEBUG_RULE_CURVES) console.log(`[extendWayGeometry] fwd stop: cross-street at ${fwdKey}`);
+            break;
+        }
+        const next = (endpointMap.get(fwdKey) || []).find(w => !visited.has(wayKey(w)));
+        if (!next) break;
+        visited.add(wayKey(next));
+
+        const nodes = next.geometry || [];
+        // Append in order away from fwdKey toward the far end
+        const newNodes = nKey(nodes[0]) === fwdKey
+            ? nodes.slice(1)                      // way starts at fwdKey: skip first, rest are forward
+            : nodes.slice(0, -1).reverse();       // way ends at fwdKey: skip last, reverse to go forward
+        if (newNodes.length === 0) break;
+
+        const connNode = appended.length > 0 ? appended[appended.length - 1] : wayGeo[wayGeo.length - 1];
+        const newLen = segLen([connNode, ...newNodes]);
+        if (fwdDist + newLen > maxExtendMeters) break;
+
+        appended.push(...newNodes);
+        fwdDist += newLen;
+        fwdKey = nKey(newNodes[newNodes.length - 1]);
+        if (window.DEBUG_RULE_CURVES) console.log(`[extendWayGeometry] fwd +${newLen.toFixed(0)}m (${newNodes.length} nodes), total fwd=${fwdDist.toFixed(0)}m`);
+    }
+
+    // Walk backward from wayGeo's first node
+    let bwdKey = origFk;
+    let bwdDist = 0;
+    while (bwdDist < maxExtendMeters) {
+        if (hasCrossStreet(bwdKey)) {
+            if (window.DEBUG_RULE_CURVES) console.log(`[extendWayGeometry] bwd stop: cross-street at ${bwdKey}`);
+            break;
+        }
+        const next = (endpointMap.get(bwdKey) || []).find(w => !visited.has(wayKey(w)));
+        if (!next) break;
+        visited.add(wayKey(next));
+
+        const nodes = next.geometry || [];
+        // Prepend in order so the far end becomes the new geometry start
+        const newNodes = nKey(nodes[nodes.length - 1]) === bwdKey
+            ? nodes.slice(0, -1)                  // way ends at bwdKey: skip last, rest go far→near
+            : nodes.slice(1).reverse();            // way starts at bwdKey: skip first, reverse to far→near
+        if (newNodes.length === 0) break;
+
+        const connNode = prepended.length > 0 ? prepended[0] : wayGeo[0];
+        const newLen = segLen([...newNodes, connNode]);
+        if (bwdDist + newLen > maxExtendMeters) break;
+
+        prepended = [...newNodes, ...prepended];
+        bwdDist += newLen;
+        bwdKey = nKey(newNodes[0]);
+        if (window.DEBUG_RULE_CURVES) console.log(`[extendWayGeometry] bwd +${newLen.toFixed(0)}m (${newNodes.length} nodes), total bwd=${bwdDist.toFixed(0)}m`);
+    }
+
+    if (prepended.length === 0 && appended.length === 0) {
+        if (window.DEBUG_RULE_CURVES) console.log(`[extendWayGeometry] "${streetName}": no extension found`);
+        return wayGeo;
+    }
+
+    const extended = [...prepended, ...wayGeo, ...appended];
+    if (window.DEBUG_RULE_CURVES) {
+        console.log(`[extendWayGeometry] "${streetName}": prepended=${prepended.length} bwd=${bwdDist.toFixed(0)}m, original=${wayGeo.length}, appended=${appended.length} fwd=${fwdDist.toFixed(0)}m → total=${extended.length} nodes`);
+    }
+    return extended;
+}
+
 async function fetchNearestStreetContext(lat, lon, allWays = null, radiusMeters = 120) {
     const ways = allWays ?? await fetchStreets(createBoundsAroundPoint(lat, lon, radiusMeters));
     return findNearestStreetContext(lat, lon, ways);
