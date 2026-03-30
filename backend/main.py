@@ -49,9 +49,32 @@ depth_model = pipeline(
 )
 print("Depth Anything V2 loaded.")
 
+# Warmup both models with dummy input to trigger PyTorch lazy init
+print("Warming up models...")
+_warmup_img = Image.fromarray(np.zeros((512, 512, 3), dtype=np.uint8))
+_t0 = time.perf_counter()
+model.predict(_warmup_img, imgsz=512, verbose=False)
+print(f"  YOLO warmup: {time.perf_counter() - _t0:.2f}s")
+_t0 = time.perf_counter()
+depth_model(_warmup_img)
+print(f"  Depth warmup: {time.perf_counter() - _t0:.2f}s")
+print("Warmup complete.")
+
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Parking Sign Detection API")
+from contextlib import asynccontextmanager
+
+httpx_client: httpx.AsyncClient | None = None
+
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    global httpx_client
+    httpx_client = httpx.AsyncClient()
+    yield
+    await httpx_client.aclose()
+    httpx_client = None
+
+app = FastAPI(title="Parking Sign Detection API", lifespan=lifespan)
 app.mount("/detected-signs", StaticFiles(directory=str(DETECTED_SIGNS_DIR)), name="detected-signs")
 
 # CORS for frontend
@@ -530,9 +553,9 @@ async def crop_sign_tiles(request: CropSignTilesRequest):
     Fetch Street View tiles at max zoom, stitch if needed, crop sign region.
     This gives much higher resolution than the Static API.
     """
-    async with httpx.AsyncClient() as client:
-        # Fetch all required tiles
-        tile_images = {}
+    client = httpx_client
+    # Fetch all required tiles
+    tile_images = {}
         for tile in request.tiles:
             url = (
                 f"https://tile.googleapis.com/v1/streetview/tiles/5/{tile['x']}/{tile['y']}"
@@ -633,12 +656,11 @@ async def crop_sign_static(request: CropSignStaticRequest):
         request.api_key,
     )
 
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.get(image_url, timeout=10.0)
-            resp.raise_for_status()
-        except httpx.HTTPError as e:
-            raise HTTPException(status_code=400, detail=f"Failed to fetch static crop: {e}")
+    try:
+        resp = await httpx_client.get(image_url, timeout=10.0)
+        resp.raise_for_status()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch static crop: {e}")
 
     try:
         image = Image.open(io.BytesIO(resp.content)).convert("RGB")
@@ -704,12 +726,11 @@ async def preview_sign(request: SignPreviewRequest):
         request.api_key,
     )
 
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.get(image_url, timeout=10.0)
-            resp.raise_for_status()
-        except httpx.HTTPError as e:
-            raise HTTPException(status_code=400, detail=f"Failed to fetch sign preview: {e}")
+    try:
+        resp = await httpx_client.get(image_url, timeout=10.0)
+        resp.raise_for_status()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch sign preview: {e}")
 
     try:
         image = Image.open(io.BytesIO(resp.content)).convert("RGB")
@@ -765,10 +786,9 @@ async def detect(request: DetectionRequest):
     # Fetch image
     try:
         t_fetch_start = time.time()
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(request.image_url, timeout=10.0)
-            resp.raise_for_status()
-            image_bytes = resp.content
+        resp = await httpx_client.get(request.image_url, timeout=10.0)
+        resp.raise_for_status()
+        image_bytes = resp.content
         t_fetch = (time.time() - t_fetch_start) * 1000
     except httpx.HTTPError as e:
         raise HTTPException(status_code=400, detail=f"Failed to fetch image: {e}")
@@ -833,11 +853,10 @@ async def detect_debug(image_url: str, confidence: float = 0.15):
         raise HTTPException(status_code=400, detail="image_url is required")
     
     # Fetch image
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(image_url, timeout=10.0)
-        resp.raise_for_status()
-        image_bytes = resp.content
-    
+    resp = await httpx_client.get(image_url, timeout=10.0)
+    resp.raise_for_status()
+    image_bytes = resp.content
+
     # Load image
     image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
     draw = ImageDraw.Draw(image)
@@ -858,7 +877,7 @@ async def detect_debug(image_url: str, confidence: float = 0.15):
                 # Draw label
                 label = f"{cls_name} {conf:.0%}"
                 draw.rectangle([x1, y1-20, x1+len(label)*8, y1], fill='red')
-                draw.text((x1+2, y1-18), label, fill='white')
+                draw.text((x1+2, y1-18), label, fill='black')
     
     # Draw center crosshair
     cx, cy = image.width // 2, image.height // 2

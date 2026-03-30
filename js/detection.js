@@ -1169,12 +1169,17 @@ function updateDetectionOverlay() {
     }
     const label = `${det.class_name} ${Math.round(det.confidence * 100)}%${depthLabel}${sizeLabel}`;
 
+    // Position label above box if there's room, otherwise flip below
+    const labelAbove = screen.y >= 22;
+    const bgY = labelAbove ? screen.y - 20 : screen.y + screen.height + 2;
+    const textY = labelAbove ? screen.y - 6 : screen.y + screen.height + 14;
+
     const labelBg = document.createElementNS(
       "http://www.w3.org/2000/svg",
       "rect",
     );
     labelBg.setAttribute("x", screen.x);
-    labelBg.setAttribute("y", screen.y - 20);
+    labelBg.setAttribute("y", bgY);
     labelBg.setAttribute("width", label.length * 7.5 + 10);
     labelBg.setAttribute("height", "18");
     labelBg.setAttribute("fill", "white");
@@ -1182,7 +1187,7 @@ function updateDetectionOverlay() {
 
     const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
     text.setAttribute("x", screen.x + 4);
-    text.setAttribute("y", screen.y - 6);
+    text.setAttribute("y", textY);
     text.setAttribute("fill", "black");
     text.setAttribute("font-size", "12");
     text.setAttribute("font-weight", "bold");
@@ -1722,7 +1727,7 @@ function showOcrModal(ocrResult, x, y) {
       return `
         <div style="margin-bottom: 8px; padding: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; border-left: 3px solid ${categoryColor};">
           <div style="font-weight: 600; color: ${categoryColor}; text-transform: uppercase; font-size: 11px;">
-            ${rule.category.replace(/_/g, " ")}${arrowStr}
+            ${(rule.category || "unknown").replace(/_/g, " ")}${arrowStr}
           </div>
           <div style="margin-top: 4px; font-size: 12px;">
             ${daysStr}<br/>
