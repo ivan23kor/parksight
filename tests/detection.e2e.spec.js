@@ -413,7 +413,7 @@ test.describe("detection flow (real OSM data)", () => {
   });
 
   test("resolves real Vassar Street geometry for 2D road marker", async ({ page }) => {
-    await mockInfrastructure(page);
+    await mockInfrastructure(page, { detectPanoramaResponse: ANGULAR_DETECTIONS_RESPONSE });
     await page.addInitScript(() => { window.__TEST_PANORAMA_POSITION = { lat: 42.3614859, lng: -71.0921589 }; });
     await page.goto("/?api_key=test-key");
 
