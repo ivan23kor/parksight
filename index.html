@@ -973,7 +973,6 @@
 
         console.log("Loaded sign map data on parksight:", data);
 
-        const projectedMarkerRadius = 5 / 3;
         let totalSigns = 0;
 
         detections.forEach((detection, detectionIndex) => {
@@ -981,10 +980,10 @@
 
 
           const cameraHeading = detection.heading;
-          const cameraCircle = L.circle(
+          const cameraCircle = L.circleMarker(
             [detection.camera.lat, detection.camera.lng],
             {
-              radius: projectedMarkerRadius,
+              radius: 5,
               color: "#1d4ed8",
               fillColor: "#60a5fa",
               weight: 2,
@@ -1039,8 +1038,8 @@
               sign.panoId = detection.panoId;
             }
 
-            const signCircle = L.circle([sign.lat, sign.lng], {
-              radius: projectedMarkerRadius,
+            const signCircle = L.circleMarker([sign.lat, sign.lng], {
+              radius: 6,
               color: "#16a34a",
               fillColor: "#22c55e",
               weight: 2,
@@ -1851,8 +1850,8 @@
         }).addTo(map);
 
         // Initialize layers
-        signMarkersLayer = L.layerGroup().addTo(map);
         ruleCurvesLayer = L.layerGroup().addTo(map);
+        signMarkersLayer = L.layerGroup().addTo(map);
         panoramaCaptureSpotsLayer = L.layerGroup().addTo(map);
         debugMapLayer = L.layerGroup().addTo(map);
 
