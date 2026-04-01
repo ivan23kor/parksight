@@ -5,7 +5,7 @@
  * Usage:
  *   bun run scripts/benchmark-models.ts [--crops-dir <path>] [--models gemini,sonnet,glm]
  *
- * Requires: GEMINI_API_KEY env (for gemini model)
+ * Requires: GEMINI_API_KEY, ANTHROPIC_API_KEY, Z_AI_API_KEY
  */
 
 import * as fs from "fs";
@@ -18,9 +18,6 @@ import sharp from "sharp";
 const DEFAULT_CROPS_DIR = path.join(import.meta.dir, "..", "benchmark", "crops");
 const RESULTS_BASE = path.join(import.meta.dir, "..", "benchmark", "results");
 
-const GEMINI_MODEL = "gemini-3.1-flash-lite-preview";
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
-
 type ModelId = "gemini" | "sonnet" | "glm";
 
 const ALL_MODELS: ModelId[] = ["gemini", "sonnet", "glm"];
@@ -31,10 +28,7 @@ const MODEL_LABELS: Record<ModelId, string> = {
   glm: "glm-5.1",
 };
 
-const MAX_RETRIES = 3;
-const INITIAL_BACKOFF_MS = 2000;
-
-// --- OCR Prompt (from backend/main.py:1293-1355) ---
+// --- OCR Prompt (from backend/main.py) ---
 
 const OCR_PROMPT = `You are a parking sign parser. You will receive a cropped image from a street-level panorama that a parking-sign detector flagged. Your job is to extract structured parking regulation data.
 
@@ -124,17 +118,6 @@ interface ModelStats {
   max_latency_ms: number;
 }
 
-// --- Image preprocessing ---
-
-async function prepareImageBase64(imagePath: string): Promise<{ base64: string; mimeType: string }> {
-  const imageBuffer = fs.readFileSync(imagePath);
-  const resizedBuffer = await sharp(imageBuffer)
-    .resize(1280, 720, { fit: "inside", withoutEnlargement: true })
-    .jpeg({ quality: 80 })
-    .toBuffer();
-  return { base64: resizedBuffer.toString("base64"), mimeType: "image/jpeg" };
-}
-
 // --- JSON extraction ---
 
 function tryParseJson(content: string): any | null {
@@ -146,10 +129,64 @@ function tryParseJson(content: string): any | null {
 
 // --- Model callers ---
 
+function callViaCli(
+  imagePath: string,
+  cliArgs: string,
+  env?: Record<string, string>
+): { content: string; latencyMs: number } {
+  const absPath = path.resolve(imagePath);
+  const prompt = `${OCR_PROMPT}\n\nAnalyze the parking sign image at: ${absPath}`;
+  const start = performance.now();
+  const stdout = execSync(
+    `claude -p ${cliArgs} --bare --dangerously-skip-permissions --allowedTools "Read" --output-format json`,
+    {
+      input: prompt,
+      encoding: "utf-8",
+      timeout: 120_000,
+      maxBuffer: 10 * 1024 * 1024,
+      env: env ? { ...process.env, ...env } : process.env,
+    }
+  );
+  const latencyMs = Math.round(performance.now() - start);
+  const data = JSON.parse(stdout);
+  return { content: data.result, latencyMs };
+}
+
+function callSonnet(imagePath: string): { content: string; latencyMs: number } {
+  return callViaCli(imagePath, `--model sonnet`, { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" });
+}
+
+function callGlm(imagePath: string): { content: string; latencyMs: number } {
+  return callViaCli(
+    imagePath,
+    `--model opus`,
+    {
+      ANTHROPIC_AUTH_TOKEN: process.env.Z_AI_API_KEY!,
+      ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
+      API_TIMEOUT_MS: "3000000",
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-5.1",
+    }
+  );
+}
+
+// --- Gemini ---
+
+async function prepareImageBase64(imagePath: string): Promise<{ base64: string; mimeType: string }> {
+  const imageBuffer = fs.readFileSync(imagePath);
+  const resizedBuffer = await sharp(imageBuffer)
+    .resize(1280, 720, { fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 80 })
+    .toBuffer();
+  return { base64: resizedBuffer.toString("base64"), mimeType: "image/jpeg" };
+}
+
+const MAX_RETRIES = 3;
+const INITIAL_BACKOFF_MS = 2000;
+
 async function callGemini(imagePath: string): Promise<{ content: string; latencyMs: number }> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY not set");
-
   const { base64, mimeType } = await prepareImageBase64(imagePath);
 
   let lastError: Error | null = null;
@@ -159,29 +196,24 @@ async function callGemini(imagePath: string): Promise<{ content: string; latency
       console.error(`  Retry ${attempt}/${MAX_RETRIES} after ${delay}ms...`);
       await new Promise(r => setTimeout(r, delay));
     }
-
     const start = performance.now();
-    const resp = await fetch(`${GEMINI_API_URL}?key=${apiKey}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{
-          parts: [
-            { inlineData: { mimeType, data: base64 } },
-            { text: OCR_PROMPT }
-          ]
-        }]
-      })
-    });
+    const resp = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_LABELS.gemini}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ inlineData: { mimeType, data: base64 } }, { text: OCR_PROMPT }] }]
+        })
+      }
+    );
     const latencyMs = Math.round(performance.now() - start);
-
     if (resp.ok) {
       const data = await resp.json() as any;
       const content = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
       if (!content) throw new Error(`Empty Gemini response: ${JSON.stringify(data)}`);
       return { content, latencyMs };
     }
-
     if (resp.status === 429 || resp.status >= 500) {
       lastError = new Error(`HTTP ${resp.status}: ${await resp.text()}`);
       continue;
@@ -191,95 +223,27 @@ async function callGemini(imagePath: string): Promise<{ content: string; latency
   throw lastError!;
 }
 
-function callCli(
-  command: string,
-  imagePath: string
-): { content: string; latencyMs: number } {
-  const absPath = path.resolve(imagePath);
-  const prompt = `${OCR_PROMPT}\n\nRead and analyze the parking sign image at: ${absPath}`;
-
-  const start = performance.now();
-  const stdout = execSync(command.replace("__PROMPT__", prompt), {
-    encoding: "utf-8",
-    timeout: 120_000,
-    maxBuffer: 10 * 1024 * 1024,
-  });
-  const latencyMs = Math.round(performance.now() - start);
-  return { content: stdout.trim(), latencyMs };
-}
-
-function callSonnet(imagePath: string): { content: string; latencyMs: number } {
-  const absPath = path.resolve(imagePath);
-  const prompt = `${OCR_PROMPT}\n\nRead and analyze the parking sign image at: ${absPath}`;
-  // Write prompt to temp file to avoid shell escaping issues
-  const tmpFile = `/tmp/benchmark-prompt-${Date.now()}.txt`;
-  fs.writeFileSync(tmpFile, prompt);
-  try {
-    const start = performance.now();
-    const stdout = execSync(
-      `cat "${tmpFile}" | claude -p --model sonnet --allowedTools "Read"`,
-      { encoding: "utf-8", timeout: 120_000, maxBuffer: 10 * 1024 * 1024, shell: "/bin/bash" }
-    );
-    const latencyMs = Math.round(performance.now() - start);
-    return { content: stdout.trim(), latencyMs };
-  } finally {
-    fs.unlinkSync(tmpFile);
-  }
-}
-
-function callGlm(imagePath: string): { content: string; latencyMs: number } {
-  const absPath = path.resolve(imagePath);
-  const prompt = `${OCR_PROMPT}\n\nRead and analyze the parking sign image at: ${absPath}`;
-  const tmpFile = `/tmp/benchmark-prompt-${Date.now()}.txt`;
-  fs.writeFileSync(tmpFile, prompt);
-  try {
-    const start = performance.now();
-    const stdout = execSync(
-      `cat "${tmpFile}" | claude -p --bare --model opus --allowedTools "Read" --dangerously-skip-permissions`,
-      {
-        encoding: "utf-8",
-        timeout: 120_000,
-        maxBuffer: 10 * 1024 * 1024,
-        shell: "/bin/bash",
-        env: {
-          ...process.env,
-          ANTHROPIC_AUTH_TOKEN: process.env.Z_AI_API_KEY,
-          ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
-          API_TIMEOUT_MS: "3000000",
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
-          ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-5.1",
-        },
-      }
-    );
-    const latencyMs = Math.round(performance.now() - start);
-    return { content: stdout.trim(), latencyMs };
-  } finally {
-    fs.unlinkSync(tmpFile);
-  }
-}
-
 // --- Run one model on one image ---
 
 async function runOne(modelId: ModelId, imagePath: string, imageName: string): Promise<ModelResult> {
   const timestamp = new Date().toISOString();
   try {
-    let content: string;
-    let latencyMs: number;
+    let result: { content: string; latencyMs: number };
 
     if (modelId === "gemini") {
-      ({ content, latencyMs } = await callGemini(imagePath));
+      result = await callGemini(imagePath);
     } else if (modelId === "sonnet") {
-      ({ content, latencyMs } = callSonnet(imagePath));
+      result = callSonnet(imagePath);
     } else {
-      ({ content, latencyMs } = callGlm(imagePath));
+      result = callGlm(imagePath);
     }
 
     return {
       model_id: MODEL_LABELS[modelId],
       image_name: imageName,
-      raw_response: content,
-      parsed_json: tryParseJson(content),
-      latency_ms: latencyMs,
+      raw_response: result.content,
+      parsed_json: tryParseJson(result.content),
+      latency_ms: result.latencyMs,
       timestamp,
       success: true,
       error: null,
@@ -330,7 +294,7 @@ function parseArgs(): { cropsDir: string; models: ModelId[] } {
     } else if (args[i] === "--models" && args[i + 1]) {
       models = args[++i].split(",").map(m => m.trim()) as ModelId[];
       for (const m of models) {
-        if (!ALL_MODELS.includes(m)) {
+        if (!ALL_MODELS.includes(m) && m !== "gemini") {
           console.error(`Unknown model: ${m}. Valid: ${ALL_MODELS.join(", ")}`);
           process.exit(1);
         }
@@ -345,7 +309,6 @@ function parseArgs(): { cropsDir: string; models: ModelId[] } {
 async function main() {
   const { cropsDir, models } = parseArgs();
 
-  // Validate
   if (models.includes("gemini") && !process.env.GEMINI_API_KEY) {
     console.error("GEMINI_API_KEY not set");
     process.exit(1);
@@ -359,7 +322,6 @@ async function main() {
     process.exit(1);
   }
 
-  // Discover images
   const images = fs.readdirSync(cropsDir)
     .filter(f => /\.(jpg|jpeg|png)$/i.test(f))
     .sort();
@@ -368,20 +330,9 @@ async function main() {
     process.exit(1);
   }
 
-  // Create run directory
   const runTs = new Date().toISOString().replace(/:/g, "-").replace(/\.\d{3}Z$/, "");
   const runDir = path.join(RESULTS_BASE, runTs);
   fs.mkdirSync(runDir, { recursive: true });
-
-  // Generate prompt files
-  const promptsDir = path.join(runDir, "prompts");
-  fs.mkdirSync(promptsDir, { recursive: true });
-  for (const img of images) {
-    const baseName = img.replace(/\.[^.]+$/, "");
-    const promptText = `${OCR_PROMPT}\n\n[Attach the image: ${img}]`;
-    fs.writeFileSync(path.join(promptsDir, `${baseName}.txt`), promptText);
-  }
-  console.error(`Prompts saved to ${promptsDir}/`);
 
   console.error(`\nBenchmark run: ${runTs}`);
   console.error(`Images: ${images.length} from ${cropsDir}`);
@@ -406,7 +357,6 @@ async function main() {
       const result = await runOne(modelId, imgPath, img);
       modelResults.push(result);
 
-      // Write immediately
       const baseName = img.replace(/\.[^.]+$/, "");
       fs.writeFileSync(
         path.join(modelDir, `${baseName}.json`),
@@ -428,7 +378,6 @@ async function main() {
 
   const totalMs = Math.round(performance.now() - totalStart);
 
-  // Write summary
   const summary: Record<string, any> = {
     run_timestamp: runTs,
     crops_dir: cropsDir,
