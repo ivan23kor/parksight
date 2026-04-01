@@ -1285,14 +1285,23 @@ function renderPanoramaLinkSpotsOverlay(overlay, pov, fov, width, height) {
       });
 
       if (typeof currentDetectionContext === "object" && currentDetectionContext) {
-        currentDetectionContext = {
-          ...currentDetectionContext,
-          panoId: link.pano,
-          heading: nextHeading,
-          pointIndex: null,
-          streetName:
-            link.description || currentDetectionContext.streetName || "Unknown street",
-        };
+        currentDetectionContext =
+          typeof buildPanoramaNavigationContext === "function"
+            ? buildPanoramaNavigationContext(
+                link.pano,
+                nextHeading,
+                link.description || currentDetectionContext.streetName,
+              )
+            : {
+                ...currentDetectionContext,
+                panoId: link.pano,
+                heading: nextHeading,
+                pointIndex: null,
+                streetName:
+                  link.description ||
+                  currentDetectionContext.streetName ||
+                  "Unknown street",
+              };
       }
       if (typeof updateDetectionInfoText === "function") {
         updateDetectionInfoText();
@@ -1323,12 +1332,18 @@ function requestPanoramaLinkSpotPosition(currentPanoId, link) {
     return;
   }
   panoramaLinkSpotRequestsInFlight.add(key);
+  const panoramaRequest =
+    typeof resolveStreetViewPanorama === "function"
+      ? resolveStreetViewPanorama({ pano: link.pano }, 5000)
+      : typeof google?.maps?.StreetViewService === "function"
+        ? Promise.resolve(new google.maps.StreetViewService().getPanorama({ pano: link.pano }))
+            .then((response) => response?.data || response || null)
+            .catch(() => null)
+        : Promise.resolve(null);
 
-  const svService = new google.maps.StreetViewService();
-  svService
-    .getPanorama({ pano: link.pano })
+  panoramaRequest
     .then((response) => {
-      const latLng = response?.data?.location?.latLng;
+      const latLng = response?.location?.latLng;
       const lat = latLng?.lat?.();
       const lng = latLng?.lng?.();
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) {

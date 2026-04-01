@@ -27,7 +27,7 @@ function forwardBrowserConsole(page) {
 async function setupPage(page) {
   forwardBrowserConsole(page);
   // No stubs — use real Google Maps API (requires GOOGLE_MAPS_API_KEY env var)
-  // No Overpass mock — use real API
+  // No Overpass mock — use real API (make sure backend is running)
 }
 
 test.describe("Street Intersection Detection E2E (real OSM data)", () => {

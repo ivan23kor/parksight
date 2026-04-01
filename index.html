@@ -446,6 +446,8 @@
       let signMarkersLayer;
       let ruleCurvesLayer;
       let panoramaCaptureSpotsLayer;
+      let panoNetworkLayer;
+      let panoNetworkSyncToken = 0;
       let isPanoramaBlackoutEnabled = false;
       let panoramaCaptureSpotsSyncToken = 0;
 
@@ -465,6 +467,7 @@
       const PREVIEW_REFINEMENT_FOV_MAX = 40;
       const DETECTION_ROAD_MARKER_HALF_LENGTH_METERS = 36;
       const PANORAMA_CAPTURE_SPOT_MAX_LINKS = 8;
+      const STREET_VIEW_REQUEST_TIMEOUT_MS = 5000;
 
       function normalizeSignMapStore(parsed) {
         if (!parsed) {
@@ -572,6 +575,89 @@
         signMarkersLayer.clearLayers();
         ruleCurvesLayer.clearLayers();
       }
+      function createStreetViewService() {
+        if (typeof google?.maps?.StreetViewService !== "function") {
+          return null;
+        }
+
+        try {
+          return new google.maps.StreetViewService();
+        } catch (err) {
+          console.warn("Failed to create Street View service:", err);
+          return null;
+        }
+      }
+
+      function resolveStreetViewPanorama(request, timeoutMs = 0) {
+        const svService = createStreetViewService();
+        if (!svService || typeof svService.getPanorama !== "function") {
+          return Promise.resolve(null);
+        }
+
+        const requestPromise = new Promise((resolve) => {
+          let settled = false;
+          const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            resolve(value || null);
+          };
+
+          try {
+            const maybePromise = svService.getPanorama(request, (data, status) => {
+              if (typeof status === "undefined") {
+                return;
+              }
+
+              const okStatus =
+                status === "OK" ||
+                status === google?.maps?.StreetViewStatus?.OK ||
+                (!status && data);
+              finish(okStatus ? data : null);
+            });
+
+            if (maybePromise && typeof maybePromise.then === "function") {
+              maybePromise
+                .then((response) => finish(response?.data || response || null))
+                .catch(() => finish(null));
+            }
+          } catch (err) {
+            finish(null);
+          }
+        });
+
+        if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+          return requestPromise;
+        }
+
+        return Promise.race([
+          requestPromise,
+          new Promise((resolve) => {
+            setTimeout(() => resolve(null), timeoutMs);
+          }),
+        ]);
+      }
+
+      function buildPanoramaNavigationContext(panoId, heading, streetName = "") {
+        return {
+          ...(currentDetectionContext || {}),
+          panoId,
+          heading: Number.isFinite(heading)
+            ? normalizeBearingDegrees(heading)
+            : currentDetectionContext?.heading ?? BASE_HEADING,
+          pointIndex: null,
+          side: currentDetectionContext?.side || DEFAULT_SIDE,
+          streetBearing: undefined,
+          oneway: null,
+          highway: null,
+          lanes: null,
+          segmentStart: null,
+          segmentEnd: null,
+          wayGeometry: null,
+          segmentIndex: null,
+          streetName:
+            streetName || currentDetectionContext?.streetName || "Unknown street",
+        };
+      }
 
       function clearPanoramaCaptureSpots() {
         panoramaCaptureSpotsLayer?.clearLayers();
@@ -626,25 +712,17 @@
           );
 
           spotMarker.on("click", () => {
-            currentDetectionContext = {
-              ...currentDetectionContext,
-              panoId: spot.panoId,
-              heading: Number.isFinite(spot.heading)
-                ? normalizeBearingDegrees(spot.heading)
-                : currentDetectionContext?.heading ?? BASE_HEADING,
-              pointIndex: null,
-              streetName:
-                spot.description ||
-                currentDetectionContext?.streetName ||
-                "Unknown street",
-            };
+            currentDetectionContext = buildPanoramaNavigationContext(
+              spot.panoId,
+              spot.heading,
+              spot.description,
+            );
             initPanoramaForContext();
           });
         }
       }
 
       async function fetchLinkedPanoramaCaptureSpots(links) {
-        const svService = new google.maps.StreetViewService();
         const uniqueLinks = [];
         const seen = new Set();
 
@@ -657,8 +735,11 @@
         const limitedLinks = uniqueLinks.slice(0, PANORAMA_CAPTURE_SPOT_MAX_LINKS);
         const settled = await Promise.allSettled(
           limitedLinks.map(async (link) => {
-            const response = await svService.getPanorama({ pano: link.pano });
-            const latLng = response?.data?.location?.latLng;
+            const panoramaData = await resolveStreetViewPanorama(
+              { pano: link.pano },
+              STREET_VIEW_REQUEST_TIMEOUT_MS,
+            );
+            const latLng = panoramaData?.location?.latLng;
             if (!latLng) {
               return null;
             }
@@ -712,6 +793,150 @@
           }
         }
       };
+
+      function clearPanoNetwork() {
+        panoNetworkLayer?.clearLayers();
+        ++panoNetworkSyncToken;
+      }
+      async function discoverPanoNetwork(seedPanoId, maxDepth = 3, seedHeading = null) {
+        const bfsToken = ++panoNetworkSyncToken;
+        const visited = new Map();
+        const fetchWithTimeout = (panoId) =>
+          resolveStreetViewPanorama(
+            { pano: panoId },
+            STREET_VIEW_REQUEST_TIMEOUT_MS,
+          );
+
+        // BFS seed
+        const seedData = await fetchWithTimeout(seedPanoId);
+        if (!seedData || bfsToken !== panoNetworkSyncToken) return null;
+
+        const seedLoc = seedData.location;
+        visited.set(seedPanoId, {
+          lat: seedLoc.latLng.lat(),
+          lng: seedLoc.latLng.lng(),
+          depth: 0,
+          heading: Number.isFinite(seedHeading)
+            ? normalizeBearingDegrees(seedHeading)
+            : 0,
+          description: seedLoc.description || "",
+          parentPanoId: null,
+        });
+
+        let frontier = [seedPanoId];
+
+        for (let depth = 1; depth <= maxDepth && frontier.length > 0; depth++) {
+          if (bfsToken !== panoNetworkSyncToken) return null;
+
+          // Collect all outgoing links from current frontier
+          const nextPanos = [];
+          const frontierData = await Promise.allSettled(
+            frontier.map(async (panoId) => {
+              const data = await fetchWithTimeout(panoId);
+              if (bfsToken !== panoNetworkSyncToken) return null;
+              return { panoId, links: data?.links || [] };
+            }),
+          );
+
+          for (const result of frontierData) {
+            if (result.status !== "fulfilled" || !result.value) continue;
+            const { panoId, links } = result.value;
+            const uniqueLinks = [];
+            const seen = new Set();
+            for (const link of links) {
+              if (!link?.pano || seen.has(link.pano) || visited.has(link.pano)) continue;
+              seen.add(link.pano);
+              uniqueLinks.push(link);
+            }
+            for (const link of uniqueLinks.slice(0, PANORAMA_CAPTURE_SPOT_MAX_LINKS)) {
+              nextPanos.push({ panoId: link.pano, heading: link.heading, description: link.description || "", parentPanoId: panoId });
+            }
+          }
+
+          if (nextPanos.length === 0) break;
+
+          // Resolve positions for next depth
+          const resolved = await Promise.allSettled(
+            nextPanos.map(async (entry) => {
+              const data = await fetchWithTimeout(entry.panoId);
+              if (bfsToken !== panoNetworkSyncToken) return null;
+              if (!data?.location?.latLng) return null;
+              return {
+                ...entry,
+                lat: data.location.latLng.lat(),
+                lng: data.location.latLng.lng(),
+                resolvedDescription: data.location.description || entry.description,
+              };
+            }),
+          );
+
+          frontier = [];
+          for (const result of resolved) {
+            if (result.status !== "fulfilled" || !result.value) continue;
+            const { panoId, lat, lng, heading, resolvedDescription, parentPanoId } = result.value;
+            if (visited.has(panoId)) continue;
+            visited.set(panoId, { lat, lng, depth, heading, description: resolvedDescription, parentPanoId });
+            frontier.push(panoId);
+          }
+        }
+
+        return bfsToken !== panoNetworkSyncToken ? null : visited;
+      }
+
+      const PANO_NETWORK_COLORS = ["#f59e0b", "#6b7280", "#9ca3af", "#d1d5db"];
+      const PANO_NETWORK_RADII = [7, 5, 4, 3];
+
+      function renderPanoNetworkOnMap(networkMap) {
+        if (!networkMap || !panoNetworkLayer) return;
+        panoNetworkLayer.clearLayers();
+
+        const polylines = [];
+
+        networkMap.forEach((node, panoId) => {
+          // Polyline to parent
+          if (node.parentPanoId && networkMap.has(node.parentPanoId)) {
+            const parent = networkMap.get(node.parentPanoId);
+            polylines.push([[parent.lat, parent.lng], [node.lat, node.lng]]);
+          }
+
+          const colorIdx = Math.min(node.depth, PANO_NETWORK_COLORS.length - 1);
+          const marker = L.circleMarker([node.lat, node.lng], {
+            radius: PANO_NETWORK_RADII[colorIdx] || 3,
+            color: PANO_NETWORK_COLORS[colorIdx],
+            fillColor: PANO_NETWORK_COLORS[colorIdx],
+            fillOpacity: 0.7,
+            weight: 1,
+          });
+
+          marker.bindPopup(
+            `<strong>Pano network</strong><br>ID: ${panoId}<br>Depth: ${node.depth}<br>${node.description || ""}`,
+          );
+
+          marker.on("click", () => {
+            const heading = networkMap.has(node.parentPanoId)
+              ? bearingBetweenPoints(
+                  networkMap.get(node.parentPanoId).lat,
+                  networkMap.get(node.parentPanoId).lng,
+                  node.lat,
+                  node.lng,
+                )
+              : node.heading || 0;
+            currentDetectionContext = buildPanoramaNavigationContext(
+              panoId,
+              heading,
+              node.description,
+            );
+            initPanoramaForContext();
+          });
+
+          marker.addTo(panoNetworkLayer);
+        });
+
+        // Render connection lines
+        for (const coords of polylines) {
+          L.polyline(coords, { color: "#9ca3af", weight: 1, opacity: 0.4 }).addTo(panoNetworkLayer);
+        }
+      }
 
       function hasDetectionRoadContext(context) {
         if (!context) return false;
@@ -1883,6 +2108,7 @@
         ruleCurvesLayer = L.layerGroup().addTo(map);
         signMarkersLayer = L.layerGroup().addTo(map);
         panoramaCaptureSpotsLayer = L.layerGroup().addTo(map);
+        panoNetworkLayer = L.layerGroup().addTo(map);
         debugMapLayer = L.layerGroup().addTo(map);
 
         // Debug overlay keyboard shortcut (Shift+D)
@@ -2043,16 +2269,24 @@
 
           const statusEl = document.getElementById("detectionStatus");
           statusEl.textContent = "Finding nearest Street View...";
+          clearPanoNetwork();
 
-          const svService = new google.maps.StreetViewService();
           try {
-            const response = await svService.getPanorama({
+            const panoramaRequest = {
               location: { lat: clickLat, lng: clickLng },
               radius: 100,
-              preference: google.maps.StreetViewPreference.NEAREST,
-              source: google.maps.StreetViewSource.OUTDOOR,
-            });
-            const panoData = response.data;
+            };
+            if (google?.maps?.StreetViewPreference?.NEAREST) {
+              panoramaRequest.preference = google.maps.StreetViewPreference.NEAREST;
+            }
+            if (google?.maps?.StreetViewSource?.OUTDOOR) {
+              panoramaRequest.source = google.maps.StreetViewSource.OUTDOOR;
+            }
+
+            const panoData = await resolveStreetViewPanorama(
+              panoramaRequest,
+              STREET_VIEW_REQUEST_TIMEOUT_MS,
+            );
             if (!panoData?.location?.pano) {
               statusEl.textContent = "No Street View coverage nearby.";
               return;
@@ -2080,6 +2314,16 @@
             const allWays = await fetchStreets(map.getBounds()).catch(() => []);
             await ensureDetectionRoadContext(panoLat, panoLng, allWays);
             initPanoramaForContext();
+
+            // Discover pano network (BFS from clicked point)
+            const network = await discoverPanoNetwork(
+              panoId,
+              3,
+              currentDetectionContext?.heading,
+            );
+            if (network) {
+              renderPanoNetworkOnMap(network);
+            }
           } catch (err) {
             console.error("Street View lookup failed:", err);
             statusEl.textContent = "No Street View coverage nearby.";
@@ -2089,6 +2333,7 @@
 
       async function loadDefaultPanorama() {
         const statusEl = document.getElementById("detectionStatus");
+        clearPanoNetwork();
 
         try {
           statusEl.textContent = "Getting session...";
@@ -2167,6 +2412,7 @@
         const panoId = currentPanoIds[index];
 
         if (!point || !panoId) return;
+        clearPanoNetwork();
 
         // Store context for detection (pointIndex for position fallback)
         currentDetectionContext = {

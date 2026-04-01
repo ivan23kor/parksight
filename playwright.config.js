@@ -17,9 +17,9 @@ module.exports = defineConfig({
     video: process.env.RECORD_VIDEO === "on" ? "on" : "off", // Record video if RECORD_VIDEO=on (for eval inspector tests)
   },
   webServer: {
-    command: "bun run serve",
+    command: "bun run start",
     url: "http://127.0.0.1:8080",
     reuseExistingServer: true,
-    timeout: 30000,
+    timeout: 120000,
   },
 });
