@@ -1232,7 +1232,7 @@
           return;
         }
 
-        let firstSignMarker = null;
+        let lastSignMarker = null;
 
 
         let totalSigns = 0;
@@ -1303,17 +1303,15 @@
               fillOpacity: 0.65,
             }).addTo(signMarkersLayer);
 
-            if (!firstSignMarker) firstSignMarker = signCircle;
+            lastSignMarker = signCircle;
 
             signCircle.bindPopup(createSignPreviewPopupHtml(sign), {
               maxWidth: 220,
-              autoClose: true,
+              autoClose: false,
+              closeOnClick: false,
             });
             signCircle.on("popupopen", (event) => {
               loadSignPreview(sign, event.popup);
-              const closeOnMove = () => signCircle.closePopup();
-              map.once("movestart", closeOnMove);
-              signCircle.on("popupclose", () => map.off("movestart", closeOnMove));
             });
 
             if (autoOpenSignUuids?.has(sign.uuid)) {
@@ -1328,8 +1326,8 @@
 
         await renderRuleCurves(data, allWays);
 
-        if (autoOpenFirst && firstSignMarker) {
-          requestAnimationFrame(() => firstSignMarker.openPopup());
+        if (autoOpenFirst && lastSignMarker) {
+          requestAnimationFrame(() => lastSignMarker.openPopup());
         }
       }
 
