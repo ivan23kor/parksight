@@ -180,13 +180,6 @@
         pointer-events: none;
       }
 
-      .sign-marker-icon {
-        font-size: 20px;
-        line-height: 24px;
-        text-align: center;
-        background: none;
-        border: none;
-      }
 
       #detectionInfo {
         position: absolute;
@@ -2154,50 +2147,6 @@
           if (e.shiftKey && e.key === "D") {
             e.preventDefault();
             toggleDebugOverlays();
-          }
-        });
-
-        // Eval capture point logger
-        let evalCapturePoints = [];
-        const EVAL_CAPTURE_KEY = "parksight_eval_capture_points";
-        document.addEventListener("keydown", (e) => {
-          const statusEl = document.getElementById("detectionStatus");
-          // M: mark current panorama position + heading as eval capture point
-          if (e.key === "m" && !e.shiftKey && !e.ctrlKey && !e.altKey) {
-            if (!detectionPanorama || !detectionPanorama.getPosition?.()) return;
-            const pos = detectionPanorama.getPosition();
-            const pov = detectionPanorama.getPov();
-            const panoId = detectionPanorama.getPano?.() || null;
-            evalCapturePoints.push({
-              lat: pos.lat(),
-              lng: pos.lng(),
-              heading: Math.round(pov.heading * 10) / 10,
-              panoId,
-            });
-            console.log(`[eval-capture] Point ${evalCapturePoints.length} logged:`, evalCapturePoints[evalCapturePoints.length - 1]);
-            if (statusEl) statusEl.textContent = `Eval point logged (${evalCapturePoints.length} total)`;
-          }
-          // Shift+M: save to localStorage and download as JSON
-          if (e.key === "M" && e.shiftKey && !e.ctrlKey) {
-            if (evalCapturePoints.length === 0) {
-              if (statusEl) statusEl.textContent = "No eval points to export";
-              return;
-            }
-            const json = JSON.stringify(evalCapturePoints, null, 2);
-            try {
-              localStorage.setItem(EVAL_CAPTURE_KEY, json);
-              console.log("[eval-capture] Saved to localStorage:", EVAL_CAPTURE_KEY);
-            } catch (err) {
-              console.warn("[eval-capture] localStorage write failed:", err.message);
-            }
-            console.log("[eval-capture] Exporting points:", json);
-            const blob = new Blob([json], { type: "application/json" });
-            const a = document.createElement("a");
-            a.href = URL.createObjectURL(blob);
-            a.download = "capture-points.json";
-            a.click();
-            URL.revokeObjectURL(a.href);
-            if (statusEl) statusEl.textContent = `Saved ${evalCapturePoints.length} eval points`;
           }
         });
 

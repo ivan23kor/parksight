@@ -366,7 +366,6 @@ function findIntersectionNodes(wayGeometry, allWays) {
     // Find real intersection nodes
     const intersectionNodes = [];
     const foundNodeIndices = new Set(); // Track which main-way node indices are already registered
-    if (window.DEBUG_RULE_CURVES) console.log(`[findIntersectionNodes] wayGeometry: ${wayGeometry.length} nodes, allWays: ${allWays.length} ways`);
     for (let nodeIdx = 0; nodeIdx < wayGeometry.length; nodeIdx++) {
         const node = wayGeometry[nodeIdx];
         const lat = node.lat;
@@ -376,13 +375,11 @@ function findIntersectionNodes(wayGeometry, allWays) {
         const key = `${lat.toFixed(PRECISION)},${lng.toFixed(PRECISION)}`;
         const wayInfos = coordKeyToWayInfos.get(key);
         if (!wayInfos || wayInfos.length < 2) {
-            if (window.DEBUG_RULE_CURVES) console.log(`  node[${nodeIdx}] (${lat.toFixed(6)}, ${lng.toFixed(6)}): ${wayInfos?.length ?? 0} ways → skip (not shared)`);
             continue;
         }
 
         const { isCrossing } = classifyCrossing(wayInfos);
         const wayNames = wayInfos.map(i => i.way.tags?.name || '(unnamed)').join(', ');
-        if (window.DEBUG_RULE_CURVES) console.log(`  node[${nodeIdx}] (${lat.toFixed(6)}, ${lng.toFixed(6)}): ${wayInfos.length} ways [${wayNames}] → isCrossing=${isCrossing}`);
         if (!isCrossing) continue;
 
         // Collect cross-street tags (ways whose direction differs from main way)
@@ -478,7 +475,6 @@ function findIntersectionNodes(wayGeometry, allWays) {
                         { way: crossWay, nodeIndex: nearestCrossIdx },
                     ];
                     const { isCrossing } = classifyCrossing(syntheticWayInfos);
-                    if (window.DEBUG_RULE_CURVES) console.log(`  [geom] crossing at (${crossLat.toFixed(6)}, ${crossLng.toFixed(6)}) → snapped to node[${nearestIdx}], cross=[${crossWay.tags?.name || 'unnamed'}], isCrossing=${isCrossing}`);
                     if (!isCrossing) continue;
 
                     // Collect cross-street tags for corner-extension calculation
@@ -514,7 +510,6 @@ function findIntersectionNodes(wayGeometry, allWays) {
         }
     }
 
-    if (window.DEBUG_RULE_CURVES) console.log(`[findIntersectionNodes] result: ${intersectionNodes.length} intersections`, intersectionNodes.map(n => `node[${n.nodeIndex}] (${n.lat.toFixed(6)}, ${n.lng.toFixed(6)}) crossStreetTags=${JSON.stringify(n.crossStreetTags)}`));
     return intersectionNodes;
 }
 
@@ -570,7 +565,6 @@ function extendWayGeometry(wayGeo, allWays, maxExtendMeters = 300, streetName = 
     }
 
     if (!streetName) {
-        if (window.DEBUG_RULE_CURVES) console.log('[extendWayGeometry] no street name found, returning unchanged');
         return wayGeo;
     }
 
@@ -642,7 +636,6 @@ function extendWayGeometry(wayGeo, allWays, maxExtendMeters = 300, streetName = 
         // Stop if current endpoint is already a cross-street intersection
         // (it's already in our geometry as the last node)
         if (hasCrossStreet(fwdKey)) {
-            if (window.DEBUG_RULE_CURVES) console.log(`[extendWayGeometry] fwd stop: cross-street at ${fwdKey}`);
             break;
         }
         const next = (endpointMap.get(fwdKey) || []).find(w => !visited.has(wayKey(w)));
@@ -663,7 +656,6 @@ function extendWayGeometry(wayGeo, allWays, maxExtendMeters = 300, streetName = 
         appended.push(...newNodes);
         fwdDist += newLen;
         fwdKey = nKey(newNodes[newNodes.length - 1]);
-        if (window.DEBUG_RULE_CURVES) console.log(`[extendWayGeometry] fwd +${newLen.toFixed(0)}m (${newNodes.length} nodes), total fwd=${fwdDist.toFixed(0)}m`);
     }
 
     // Walk backward from wayGeo's first node
@@ -671,7 +663,6 @@ function extendWayGeometry(wayGeo, allWays, maxExtendMeters = 300, streetName = 
     let bwdDist = 0;
     while (bwdDist < maxExtendMeters) {
         if (hasCrossStreet(bwdKey)) {
-            if (window.DEBUG_RULE_CURVES) console.log(`[extendWayGeometry] bwd stop: cross-street at ${bwdKey}`);
             break;
         }
         const next = (endpointMap.get(bwdKey) || []).find(w => !visited.has(wayKey(w)));
@@ -692,18 +683,13 @@ function extendWayGeometry(wayGeo, allWays, maxExtendMeters = 300, streetName = 
         prepended = [...newNodes, ...prepended];
         bwdDist += newLen;
         bwdKey = nKey(newNodes[0]);
-        if (window.DEBUG_RULE_CURVES) console.log(`[extendWayGeometry] bwd +${newLen.toFixed(0)}m (${newNodes.length} nodes), total bwd=${bwdDist.toFixed(0)}m`);
     }
 
     if (prepended.length === 0 && appended.length === 0) {
-        if (window.DEBUG_RULE_CURVES) console.log(`[extendWayGeometry] "${streetName}": no extension found`);
         return wayGeo;
     }
 
     const extended = [...prepended, ...wayGeo, ...appended];
-    if (window.DEBUG_RULE_CURVES) {
-        console.log(`[extendWayGeometry] "${streetName}": prepended=${prepended.length} bwd=${bwdDist.toFixed(0)}m, original=${wayGeo.length}, appended=${appended.length} fwd=${fwdDist.toFixed(0)}m → total=${extended.length} nodes`);
-    }
     return extended;
 }
 

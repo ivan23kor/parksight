@@ -3001,18 +3001,6 @@ function projectSignToCurbLine(
     distanceMeters,
   );
 
-  if (debugOverlaysEnabled) {
-    console.log(
-      `[projectSignToCurbLine] heading=${signHeading.toFixed(1)}° ` +
-        `trafficBearing=${trafficBearing.toFixed(1)}° ` +
-        `headingDelta=${headingDelta.toFixed(1)}° ` +
-        `dist=${distanceMeters.toFixed(1)}m → ` +
-        `along=${alongStreetDistance.toFixed(1)}m cross=${crossStreetDistance.toFixed(1)}m ` +
-        `(cos=${Math.cos(headingDeltaRad).toFixed(3)}) ` +
-        `side=${resolvedSide} edgeOffset=${edgeOffsetMeters.toFixed(1)}m`,
-    );
-  }
-
   if (hasWayGeometry(wayGeometry)) {
     const anchor =
       projectPointOntoWayGeometry(cameraLat, cameraLng, wayGeometry, segmentIndex) ||
@@ -3053,14 +3041,6 @@ function projectSignToCurbLine(
           lateralBearing,
         );
 
-        if (debugOverlaysEnabled) {
-          console.log(
-            `  [wayGeometry] anchor=(${anchor.lat.toFixed(6)},${anchor.lng.toFixed(6)}) seg=${anchor.segmentIndex} ` +
-              `anchorBearing=${anchorBearing.toFixed(1)}° walkSign=${walkDirectionSign} ` +
-              `roadPt=(${roadPoint.lat.toFixed(6)},${roadPoint.lng.toFixed(6)}) ` +
-              `lateralBearing=${lateralBearing.toFixed(1)}° → snapped=(${snapped.lat.toFixed(6)},${snapped.lng.toFixed(6)})`,
-          );
-        }
 
         return {
           lat: snapped.lat,
@@ -3728,9 +3708,6 @@ function findDistanceToNearestCorner(
 
   const travelDirSign = getWayTravelDirectionSign(sign, wayGeometry, anchor);
   const directionSign = direction * travelDirSign;
-  if (window.DEBUG_RULE_CURVES) {
-    console.log(`[findDistanceToNearestCorner] signOffset=${signOffset.toFixed(2)}m, direction=${direction}, travelDirSign=${travelDirSign}, directionSign=${directionSign}, intersectionNodes=${(intersectionNodes || []).length}`);
-  }
   let nearestIntersection = Infinity;
 
   for (const node of intersectionNodes || []) {
@@ -3741,19 +3718,16 @@ function findDistanceToNearestCorner(
 
     const nodeOffset = getWayNodeOffsetMeters(wayGeometry, node.nodeIndex);
     if (!Number.isFinite(nodeOffset)) {
-      if (window.DEBUG_RULE_CURVES) console.log(`  skip node[${node.nodeIndex}] (nodeOffset not finite)`);
       continue;
     }
 
     const signedDistance = nodeOffset - signOffset;
     if (signedDistance * directionSign <= 0) {
-      if (window.DEBUG_RULE_CURVES) console.log(`  skip node[${node.nodeIndex}] @ offset=${nodeOffset.toFixed(2)}m: signedDist=${signedDistance.toFixed(2)}m is wrong direction (directionSign=${directionSign})`);
       continue;
     }
 
     const distanceMeters = Math.abs(signedDistance);
     if (distanceMeters <= RULE_CURVE_INTERSECTION_SKIP_METERS) {
-      if (window.DEBUG_RULE_CURVES) console.log(`  skip node[${node.nodeIndex}]: dist=${distanceMeters.toFixed(2)}m ≤ SKIP_METERS=${RULE_CURVE_INTERSECTION_SKIP_METERS}`);
       continue;
     }
 
@@ -3766,26 +3740,22 @@ function findDistanceToNearestCorner(
     }
 
     const adjustedDistance = distanceMeters + cornerExtension;
-    if (window.DEBUG_RULE_CURVES) console.log(`  node[${node.nodeIndex}] @ offset=${nodeOffset.toFixed(2)}m: centerlineDist=${distanceMeters.toFixed(2)}m + cornerExt=${cornerExtension.toFixed(2)}m = ${adjustedDistance.toFixed(2)}m`);
     if (adjustedDistance < nearestIntersection) {
       nearestIntersection = adjustedDistance;
     }
   }
 
   if (Number.isFinite(nearestIntersection)) {
-    if (window.DEBUG_RULE_CURVES) console.log(`[findDistanceToNearestCorner] → ${nearestIntersection.toFixed(2)}m (intersection)`);
     return nearestIntersection;
   }
 
   const endpointIndex = directionSign > 0 ? wayGeometry.length - 1 : 0;
   const endpointOffset = getWayNodeOffsetMeters(wayGeometry, endpointIndex);
   if (!Number.isFinite(endpointOffset)) {
-    if (window.DEBUG_RULE_CURVES) console.log(`[findDistanceToNearestCorner] → ${RULE_CURVE_DEFAULT_LENGTH_METERS}m (DEFAULT, endpoint offset not finite)`);
     return RULE_CURVE_DEFAULT_LENGTH_METERS;
   }
 
   const endpointDist = Math.abs(endpointOffset - signOffset);
-  if (window.DEBUG_RULE_CURVES) console.log(`[findDistanceToNearestCorner] → ${endpointDist.toFixed(2)}m (way endpoint, endpointOffset=${endpointOffset.toFixed(2)}m)`);
   return endpointDist;
 }
 
