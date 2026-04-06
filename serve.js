@@ -18,15 +18,54 @@ const PORT = 8080;
 const API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 const LEGACY_UI_PATHS = ['/ui-map', '/ui-panorama', '/ui-upload', '/dist'];
 
-const injectScript = API_KEY ? `
+// ── Live reload via SSE ──
+const WATCH_EXTENSIONS = new Set(['.html', '.js', '.css']);
+const sseClients = new Set();
+let reloadVersion = Date.now();
+
+fs.watch('.', { recursive: true }, (eventType, filename) => {
+    if (!filename) return;
+    if (filename.startsWith('node_modules') || filename.startsWith('.') || filename.startsWith('logs')) return;
+    const ext = path.extname(filename).toLowerCase();
+    if (!WATCH_EXTENSIONS.has(ext)) return;
+    reloadVersion = Date.now();
+    for (const res of sseClients) {
+        res.write(`data: ${reloadVersion}\n\n`);
+    }
+});
+
+const liveReloadScript = `
+    <script>
+    (function() {
+        var es = new EventSource('/__livereload');
+        es.onmessage = function() { location.reload(); };
+        es.onerror = function() { es.close(); setTimeout(function() { location.reload(); }, 2000); };
+    })();
+    </script>
+`;
+
+const injectScript = (API_KEY ? `
     <script>
     window.env = window.env || {};
     window.env.GOOGLE_MAPS_API_KEY = "${API_KEY}";
     </script>
-` : '';
+` : '') + liveReloadScript;
 
 const server = http.createServer((req, res) => {
     const requestUrl = new URL(req.url, `http://${req.headers.host || `127.0.0.1:${PORT}`}`);
+
+    // SSE live reload endpoint
+    if (requestUrl.pathname === '/__livereload') {
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+        });
+        res.write(`data: ${reloadVersion}\n\n`);
+        sseClients.add(res);
+        req.on('close', () => sseClients.delete(res));
+        return;
+    }
 
     if (
         LEGACY_UI_PATHS.some((legacyPath) =>
