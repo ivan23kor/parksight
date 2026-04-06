@@ -2096,12 +2096,12 @@
         }
 
         // Initialize Leaflet map
-        map = L.map("map", { maxZoom: 20, minZoom: 2 }).setView([42.36157, -71.09727], 20);
+        map = L.map("map", { maxZoom: 19, minZoom: 2 }).setView([42.36157, -71.09727], 19);
 
         // Add tile layer (OpenStreetMap with street names)
         L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
           attribution: "© OpenStreetMap contributors",
-          maxZoom: 20,
+          maxZoom: 19,
         }).addTo(map);
 
         // Initialize layers
