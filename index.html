@@ -447,6 +447,7 @@
       let ruleCurvesLayer;
       let panoramaCaptureSpotsLayer;
       let panoNetworkLayer;
+      let headingArrowLayer;
       let panoNetworkSyncToken = 0;
       let isPanoramaBlackoutEnabled = false;
       let panoramaCaptureSpotsSyncToken = 0;
@@ -661,6 +662,42 @@
 
       function clearPanoramaCaptureSpots() {
         panoramaCaptureSpotsLayer?.clearLayers();
+      }
+
+      function clearHeadingArrow() {
+        headingArrowLayer?.clearLayers();
+      }
+
+      function updateHeadingArrowOnMap() {
+        if (!headingArrowLayer || !detectionPanorama) return;
+        headingArrowLayer.clearLayers();
+
+        const pos = detectionPanorama.getPosition();
+        const pov = detectionPanorama.getPov();
+        if (!pos || !pov || !Number.isFinite(pov.heading)) return;
+
+        const lat = pos.lat();
+        const lng = pos.lng();
+        const heading = pov.heading * Math.PI / 180;
+
+        const arrowLen = 0.00012;
+        const tipLat = lat + arrowLen * Math.cos(heading);
+        const tipLng = lng + arrowLen * Math.sin(heading) / Math.cos(lat * Math.PI / 180);
+
+        const wingAngle = 0.5;
+        const wingLen = 0.00005;
+        const leftLat = tipLat - wingLen * Math.cos(heading - wingAngle);
+        const leftLng = tipLng - wingLen * Math.sin(heading - wingAngle) / Math.cos(lat * Math.PI / 180);
+        const rightLat = tipLat - wingLen * Math.cos(heading + wingAngle);
+        const rightLng = tipLng - wingLen * Math.sin(heading + wingAngle) / Math.cos(lat * Math.PI / 180);
+
+        L.polyline([[lat, lng], [tipLat, tipLng]], {
+          color: "#2563eb", weight: 3, opacity: 0.9,
+        }).addTo(headingArrowLayer);
+
+        L.polyline([[tipLat, tipLng], [leftLat, leftLng], [tipLat, tipLng], [rightLat, rightLng]], {
+          color: "#2563eb", weight: 3, opacity: 0.9,
+        }).addTo(headingArrowLayer);
       }
 
       function renderPanoramaCaptureSpotsOnMap(currentSpot, linkedSpots) {
@@ -2109,6 +2146,7 @@
         signMarkersLayer = L.layerGroup().addTo(map);
         panoramaCaptureSpotsLayer = L.layerGroup().addTo(map);
         panoNetworkLayer = L.layerGroup().addTo(map);
+        headingArrowLayer = L.layerGroup().addTo(map);
         debugMapLayer = L.layerGroup().addTo(map);
 
         // Debug overlay keyboard shortcut (Shift+D)
@@ -2641,6 +2679,7 @@
           document.getElementById("detectionPanorama"),
         );
         updateDetectionInfoText();
+        updateHeadingArrowOnMap();
         if (typeof syncPanoramaCaptureSpotsOnMap === "function") {
           syncPanoramaCaptureSpotsOnMap();
         }

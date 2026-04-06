@@ -1393,6 +1393,9 @@ function initDetectionPanorama(panoId, heading, container) {
         if (typeof updateDetectionInfoText === "function") {
           updateDetectionInfoText();
         }
+        if (typeof updateHeadingArrowOnMap === "function") {
+          updateHeadingArrowOnMap();
+        }
       },
     );
     panoChangeListener = detectionPanorama.addListener(
@@ -1404,6 +1407,9 @@ function initDetectionPanorama(panoId, heading, container) {
             console.warn("Failed to sync panorama spots after pano change:", err);
           });
         }
+        if (typeof updateHeadingArrowOnMap === "function") {
+          updateHeadingArrowOnMap();
+        }
       },
     );
     positionChangeListener = detectionPanorama.addListener(
@@ -1414,6 +1420,9 @@ function initDetectionPanorama(panoId, heading, container) {
           Promise.resolve(syncPanoramaCaptureSpotsOnMap()).catch((err) => {
             console.warn("Failed to sync panorama spots after position change:", err);
           });
+        }
+        if (typeof updateHeadingArrowOnMap === "function") {
+          updateHeadingArrowOnMap();
         }
       },
     );
