@@ -1223,7 +1223,7 @@
         return pts;
       }
 
-      async function renderSignMapData(data, allWays = null, autoOpenSignUuids = null) {
+      async function renderSignMapData(data, allWays = null, autoOpenSignUuids = null, autoOpenFirst = false) {
         latestRenderedSignMapData = data;
         signMarkersLayer.clearLayers();
 
@@ -1231,6 +1231,8 @@
         if (detections.length === 0) {
           return;
         }
+
+        let firstSignMarker = null;
 
 
         let totalSigns = 0;
@@ -1301,6 +1303,8 @@
               fillOpacity: 0.65,
             }).addTo(signMarkersLayer);
 
+            if (!firstSignMarker) firstSignMarker = signCircle;
+
             signCircle.bindPopup(createSignPreviewPopupHtml(sign), {
               maxWidth: 220,
               autoClose: true,
@@ -1323,6 +1327,10 @@
 
 
         await renderRuleCurves(data, allWays);
+
+        if (autoOpenFirst && firstSignMarker) {
+          requestAnimationFrame(() => firstSignMarker.openPopup());
+        }
       }
 
       function buildRulePopupHtml(rule, isTowZone = false) {
@@ -2184,6 +2192,21 @@
           const updatedStore = appendSignMapDetection(detection);
           renderSignMapData(updatedStore, _lastAllWays);
 
+          // Auto-open first sign popup after fresh detection
+          if (_pendingSignAutoOpen) {
+            _pendingSignAutoOpen = false;
+            requestAnimationFrame(() => {
+              let opened = false;
+              signMarkersLayer.eachLayer(l => {
+                if (opened) return;
+                if ((l.options?.fillColor === "#22c55e") && l.getPopup()) {
+                  l.openPopup();
+                  opened = true;
+                }
+              });
+            });
+          }
+
           // Refresh any open popup that was showing "Extracting text..."
           for (const sign of detection.signs) {
             if (!sign.previewContainerId || !sign.ocrResult) continue;
@@ -2367,6 +2390,7 @@
       let currentDetectionContext = null;
       // Cached allWays from the last detection run; reused by ocr-complete re-render
       let _lastAllWays = null;
+      let _pendingSignAutoOpen = false;
 
       function updateDetectionInfoText() {
         const infoEl = document.getElementById("detectionInfo");
@@ -2585,7 +2609,8 @@
 
         const newSignUuids = new Set(signLocations.filter(s => s.uuid).map(s => s.uuid));
         const initialStore = appendSignMapDetection(detectionEntry);
-        await renderSignMapData(initialStore, allWays, newSignUuids);
+        _pendingSignAutoOpen = true;
+        await renderSignMapData(initialStore, allWays, newSignUuids, true);
 
         hydrateDetectionPreviews(signLocations, detectedPanoId)
           .then(async () => {
@@ -2593,7 +2618,7 @@
               ...detectionEntry,
               signs: signLocations,
             });
-            await renderSignMapData(hydratedStore, allWays, newSignUuids);
+            await renderSignMapData(hydratedStore, allWays, newSignUuids, _pendingSignAutoOpen);
           })
           .catch((previewErr) => {
             console.warn("Sign preview hydration failed:", previewErr);
