@@ -20,20 +20,26 @@ const LEGACY_UI_PATHS = ['/ui-map', '/ui-panorama', '/ui-upload', '/dist'];
 
 // ── Live reload via SSE ──
 const WATCH_EXTENSIONS = new Set(['.html', '.js', '.css']);
-const WATCH_IGNORE = ['node_modules', '.', 'logs', 'detected_signs', 'worktrees', '.venv', 'test-results', 'datasets'];
 const sseClients = new Set();
 let reloadVersion = Date.now();
 
-fs.watch('.', { recursive: true }, (eventType, filename) => {
+const notifyReload = (filename) => {
     if (!filename) return;
-    if (WATCH_IGNORE.some(dir => filename.startsWith(dir + '/') || filename.startsWith(dir + '\\'))) return;
     const ext = path.extname(filename).toLowerCase();
     if (!WATCH_EXTENSIONS.has(ext)) return;
     reloadVersion = Date.now();
     for (const res of sseClients) {
         res.write(`data: ${reloadVersion}\n\n`);
     }
-});
+};
+
+for (const dir of ['.', 'js']) {
+    try {
+        fs.watch(dir, (eventType, filename) => notifyReload(filename));
+    } catch (e) {
+        console.warn(`Live reload: failed to watch ${dir}: ${e.message}`);
+    }
+}
 
 const liveReloadScript = `
     <script>
