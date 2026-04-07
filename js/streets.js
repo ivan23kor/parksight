@@ -197,9 +197,13 @@ function getWayNodeLng(node) {
     return node?.lon ?? node?.lng ?? null;
 }
 
-function findNearestStreetContext(lat, lon, ways) {
+function findNearestStreetContext(lat, lon, ways, cameraHeading = null) {
     const point = { x: 0, y: 0 };
     let nearest = null;
+
+    // When cameraHeading is available, segments within this distance threshold
+    // of the closest one are compared by heading alignment instead.
+    const HEADING_TIE_BREAK_METERS = 5;
 
     for (const way of ways) {
         const nodes = way.geometry || [];
@@ -221,16 +225,41 @@ function findNearestStreetContext(lat, lon, ways) {
             const end = toLocalMeters(segmentEnd.lat, segmentEndLng, lat, lon);
             const distanceMeters = distanceToSegmentMeters(point, start, end);
 
-            if (nearest && distanceMeters >= nearest.distanceMeters) {
+            if (nearest && distanceMeters >= nearest.distanceMeters + HEADING_TIE_BREAK_METERS) {
+                continue;
+            }
+
+            const segBearing = turf.bearing(
+                turf.point([segmentStartLng, segmentStart.lat]),
+                turf.point([segmentEndLng, segmentEnd.lat])
+            );
+
+            // Heading-aware tie-breaking at intersections: when distances are
+            // within threshold, prefer the segment whose bearing aligns with
+            // the camera direction (the street the driver is on).
+            if (nearest && Number.isFinite(cameraHeading)) {
+                const bothClose = distanceMeters < nearest.distanceMeters + HEADING_TIE_BREAK_METERS
+                    && nearest.distanceMeters < distanceMeters + HEADING_TIE_BREAK_METERS;
+                if (bothClose) {
+                    // Smallest angular difference between bearing and camera heading
+                    // (treating bearing and bearing+180 as equivalent since OSM direction is arbitrary)
+                    const angleDiff = (a, b) => {
+                        const d = Math.abs(((a - b + 540) % 360) - 180);
+                        return Math.min(d, 180 - d);
+                    };
+                    const newAlign = angleDiff(segBearing, cameraHeading);
+                    const curAlign = angleDiff(nearest.bearing, cameraHeading);
+                    if (newAlign >= curAlign) {
+                        continue;
+                    }
+                }
+            } else if (nearest && distanceMeters >= nearest.distanceMeters) {
                 continue;
             }
 
             nearest = {
                 distanceMeters,
-                bearing: turf.bearing(
-                    turf.point([segmentStartLng, segmentStart.lat]),
-                    turf.point([segmentEndLng, segmentEnd.lat])
-                ),
+                bearing: segBearing,
                 oneway: way.tags.oneway || null,
                 highway: way.tags.highway || null,
                 lanes: way.tags.lanes || null,
@@ -693,9 +722,9 @@ function extendWayGeometry(wayGeo, allWays, maxExtendMeters = 300, streetName = 
     return extended;
 }
 
-async function fetchNearestStreetContext(lat, lon, allWays = null, radiusMeters = 120) {
+async function fetchNearestStreetContext(lat, lon, allWays = null, radiusMeters = 120, cameraHeading = null) {
     const ways = allWays ?? await fetchStreets(createBoundsAroundPoint(lat, lon, radiusMeters));
-    return findNearestStreetContext(lat, lon, ways);
+    return findNearestStreetContext(lat, lon, ways, cameraHeading);
 }
 
 /**

@@ -640,6 +640,10 @@
             : currentDetectionContext?.heading ?? BASE_HEADING,
           pointIndex: null,
           side: currentDetectionContext?.side || DEFAULT_SIDE,
+          // Stash previous bearing for heading-aware street disambiguation
+          _prevStreetBearing: Number.isFinite(currentDetectionContext?.streetBearing)
+            ? currentDetectionContext.streetBearing
+            : currentDetectionContext?._prevStreetBearing ?? null,
           streetBearing: undefined,
           oneway: null,
           highway: null,
@@ -991,7 +995,13 @@
         }
 
         try {
-          const nearestStreet = await fetchNearestStreetContext(lat, lng, allWays);
+          // Use street bearing (travel direction) for heading-aware disambiguation.
+          // When streetBearing was cleared (pano moved), fall back to the stashed
+          // previous bearing — the user likely moved along the same street.
+          const travelHeading = Number.isFinite(currentDetectionContext?.streetBearing)
+            ? currentDetectionContext.streetBearing
+            : currentDetectionContext?._prevStreetBearing ?? null;
+          const nearestStreet = await fetchNearestStreetContext(lat, lng, allWays, 120, travelHeading);
           if (!nearestStreet) {
             return currentDetectionContext;
           }
@@ -2487,6 +2497,10 @@
           currentDetectionContext = {
             ...currentDetectionContext,
             panoId: currentPano,
+            // Stash previous bearing for heading-aware street disambiguation
+            _prevStreetBearing: Number.isFinite(currentDetectionContext.streetBearing)
+              ? currentDetectionContext.streetBearing
+              : currentDetectionContext._prevStreetBearing ?? null,
             // Clear stale road data so ensureDetectionRoadContext re-fetches
             streetBearing: undefined,
             segmentStart: null,
