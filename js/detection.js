@@ -899,15 +899,10 @@ function screenToAngular(
 /**
  * Convert heading/pitch to tile pixel coordinates with tilt correction.
  *
- * Google's stabilized tiles are equirectangular in the camera's local frame.
- * Heading maps directly (world heading - panoHeading), but pitch is offset
- * by the camera's tilt. The offset depends on relative heading:
- *
- *   - Looking forward  (relH=0°):   tilt shifts pitch by +tiltOffset
- *   - Looking sideways  (relH=90°):  no pitch shift (tilt becomes heading shift)
- *   - Looking backward (relH=180°): tilt shifts pitch by -tiltOffset
- *
- * Formula: tilePitch = worldPitch + (tilt - 90) * cos(relativeHeading)
+ * Uses a proper 3D rotation to account for camera tilt in the equirectangular
+ * tile grid. The camera's physical tilt is compensated by rotating the world
+ * direction vector into the camera's local frame and then applying the inverse
+ * tilt rotation.
  */
 function headingPitchToPixelCorrected(
   heading,
@@ -917,19 +912,44 @@ function headingPitchToPixelCorrected(
   panoHeading = 0,
   tilt = 90,
 ) {
-  let h = (heading - panoHeading + 180 + 360) % 360;
-  const x = (h / 360) * imageWidth;
+  const deg2rad = Math.PI / 180;
+  const rad2deg = 180 / Math.PI;
 
-  // Tilt correction: only affects Y, scales with cos(relativeHeading)
-  const tiltOffset = tilt - 90; // degrees, positive = camera looks down
-  let relH = heading - panoHeading;
-  if (relH < -180) relH += 360;
-  if (relH > 180) relH -= 360;
+  // 1. World (heading, pitch) → 3D direction vector (x=east, y=north, z=up)
+  const hRad = heading * deg2rad;
+  const pRad = pitch * deg2rad;
+  const cosP = Math.cos(pRad);
+  const dx = cosP * Math.sin(hRad);
+  const dy = cosP * Math.cos(hRad);
+  const dz = Math.sin(pRad);
 
-  const yCorrection =
-    tiltOffset * Math.cos((relH * Math.PI) / 180) * (imageHeight / 180);
+  // 2. Camera-local frame (rotate by -panoHeading around Z)
+  const phRad = panoHeading * deg2rad;
+  const cosPh = Math.cos(phRad);
+  const sinPh = Math.sin(phRad);
+  const localX = dx * cosPh - dy * sinPh; // right
+  const localY = dx * sinPh + dy * cosPh; // forward
+  const localZ = dz; // up
+
+  // 3. Inverse tilt rotation (rotate by alpha around X/right axis)
+  //    alpha = tilt - 90: positive = camera looks down
+  const alpha = (tilt - 90) * deg2rad;
+  const cosA = Math.cos(alpha);
+  const sinA = Math.sin(alpha);
+  const stabX = localX;
+  const stabY = cosA * localY + sinA * localZ;
+  const stabZ = -sinA * localY + cosA * localZ;
+
+  // 4. Stabilized direction → equirectangular pixels
+  const stabRelHDeg = Math.atan2(stabX, stabY) * rad2deg;
+  const stabPitchDeg = Math.asin(Math.max(-1, Math.min(1, stabZ))) * rad2deg;
+
+  const x = ((stabRelHDeg + 180) / 360) * imageWidth;
+  const y = ((90 - stabPitchDeg) / 180) * imageHeight;
+
+  // yCorrection = difference from uncorrected position (for diagnostics)
   const yBase = ((90 - pitch) / 180) * imageHeight;
-  const y = yBase + yCorrection;
+  const yCorrection = y - yBase;
 
   return { x, y, yCorrection };
 }
@@ -1969,6 +1989,19 @@ async function buildDetectionCropPlan(det, panoId, cropCenterOverride = null) {
     CROP_PADDING_X,
     CROP_PADDING_Y,
   );
+
+  console.log('[CROP-DIAG]', JSON.stringify({
+    det: { heading: det.heading, pitch: det.pitch, angW: det.angularWidth, angH: det.angularHeight },
+    meta: { panoHeading, tilt, metaImgW: metadata.imageWidth, metaImgH: metadata.imageHeight },
+    gridSize: { w: imageWidth, h: imageHeight },
+    cropCenter: { heading: cropHeading, pitch: cropPitch },
+    uncorrected: { x: uncorrected.x?.toFixed(1), y: uncorrected.y?.toFixed(1) },
+    corrected: { x: corrected.x?.toFixed(1), y: corrected.y?.toFixed(1), yCorr: corrected.yCorrection?.toFixed(1) },
+    signPx: { w: signSize.width?.toFixed(1), h: signSize.height?.toFixed(1) },
+    relH: { det: detectionRelH?.toFixed(1), crop: cropRelH?.toFixed(1) },
+    tiles: { x1: tileX1, y1: tileY1, count: tiles.length },
+    cropBounds,
+  }));
 
   return {
     session,

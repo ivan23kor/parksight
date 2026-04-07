@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Tilt Offset Annotation Tool</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: monospace; background: #1a1a1a; color: #eee; }
+#toolbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 12px; background: #2a2a2a; border-bottom: 1px solid #444;
+  flex-wrap: wrap;
+}
+#toolbar button, #toolbar label {
+  padding: 4px 10px; background: #444; color: #eee; border: 1px solid #666;
+  border-radius: 3px; cursor: pointer; font-family: monospace; font-size: 13px;
+}
+#toolbar button:hover { background: #555; }
+#toolbar button.active { background: #0a7; border-color: #0c9; }
+#toolbar span { font-size: 13px; color: #aaa; }
+#status { flex: 1; text-align: right; font-size: 13px; color: #aaa; }
+
+#panels { display: flex; height: calc(100vh - 42px); }
+.panel {
+  flex: 1; position: relative; overflow: hidden;
+  border-right: 1px solid #444;
+}
+.panel:last-child { border-right: none; }
+.panel-label {
+  position: absolute; top: 4px; left: 8px; z-index: 10;
+  background: rgba(0,0,0,0.7); padding: 2px 8px; border-radius: 3px;
+  font-size: 12px; color: #ccc;
+}
+.panel canvas {
+  display: block; width: 100%; height: 100%;
+  cursor: crosshair;
+}
+
+#info-bar {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: #2a2a2a; border-top: 1px solid #444;
+  padding: 4px 12px; font-size: 12px; color: #aaa;
+  display: flex; gap: 20px;
+}
+
+.marker-top { color: #ff4444; }
+.marker-bot { color: #44aaff; }
+.help-text { color: #666; font-size: 11px; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <label>
+    <input type="file" id="fileInput" accept=".jsonl,.json,.txt" style="display:none">
+    Load JSONL
+  </label>
+  <button id="prevBtn" title="Previous (Left arrow)">&lt;</button>
+  <span id="counter">0/0</span>
+  <button id="nextBtn" title="Next (Right arrow)">&gt;</button>
+  <button id="skipBtn" title="Skip (S)">Skip</button>
+  <button id="exportBtn" title="Export (E)">Export CSV</button>
+  <span class="help-text">Click=aim T=top B=bottom | Arrows=nav | S=skip | E=export</span>
+  <span id="status"></span>
+</div>
+
+<div id="panels">
+  <div class="panel" id="eqPanel">
+    <div class="panel-label">EQUIRECTANGULAR (tiles)</div>
+    <canvas id="eqCanvas"></canvas>
+  </div>
+  <div class="panel" id="gnPanel">
+    <div class="panel-label">GNOMONIC (static API)</div>
+    <canvas id="gnCanvas"></canvas>
+  </div>
+</div>
+
+<div id="info-bar">
+  <span id="infoMeta">--</span>
+  <span id="infoAnnotation">--</span>
+</div>
+
+<script>
+const TILE_SIZE = 512;
+const MAX_ZOOM = 5;
+const TILE_GRID_W = 32 * TILE_SIZE; // 16384
+const TILE_GRID_H = 16 * TILE_SIZE; // 8192
+const EQ_CROP_MARGIN = 200; // px around predicted center to fetch
+const GN_IMG_SIZE = 640;
+
+// State
+let detections = [];
+let currentIndex = 0;
+let annotations = {}; // index -> { eqTop, eqBot, gnTop, gnBot }
+let skipped = new Set();
+let currentEqImage = null; // { img, originX, originY, predictedX, predictedY }
+let currentGnImage = null; // { img, bboxX1, bboxY1, bboxX2, bboxY2 }
+let apiKey = null;
+let session = null;
+
+// DOM
+const fileInput = document.getElementById("fileInput");
+const prevBtn = document.getElementById("prevBtn");
+const nextBtn = document.getElementById("nextBtn");
+const skipBtn = document.getElementById("skipBtn");
+const exportBtn = document.getElementById("exportBtn");
+const counterEl = document.getElementById("counter");
+const statusEl = document.getElementById("status");
+const infoMeta = document.getElementById("infoMeta");
+const infoAnnotation = document.getElementById("infoAnnotation");
+const eqCanvas = document.getElementById("eqCanvas");
+const gnCanvas = document.getElementById("gnCanvas");
+const eqCtx = eqCanvas.getContext("2d");
+const gnCtx = gnCanvas.getContext("2d");
+
+// --- API Key (auto-injected by serve.js or prompted) ---
+function getApiKey() {
+  if (apiKey) return apiKey;
+  apiKey = window.env?.GOOGLE_MAPS_API_KEY
+    || localStorage.getItem("annotate_api_key");
+  if (!apiKey) {
+    apiKey = prompt("Enter your Google Maps API key:");
+    if (apiKey) localStorage.setItem("annotate_api_key", apiKey);
+  }
+  return apiKey;
+}
+
+// --- Map Tiles API ---
+async function getSession() {
+  if (session) return session;
+  const key = getApiKey();
+  const resp = await fetch(`https://tile.googleapis.com/v1/createSession?key=${key}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mapType: "streetview", language: "en-US", region: "US" }),
+  });
+  if (!resp.ok) throw new Error(`Session creation failed: ${resp.status}`);
+  const data = await resp.json();
+  session = data.session;
+  return session;
+}
+
+async function fetchTileImage(panoId, x, y, session) {
+  const key = getApiKey();
+  const url = `https://tile.googleapis.com/v1/streetview/tiles/${MAX_ZOOM}/${x}/${y}?session=${session}&key=${key}&panoId=${panoId}`;
+  const resp = await fetch(url);
+  if (!resp.ok) return null;
+  const blob = await resp.blob();
+  return createImageBitmap(blob);
+}
+
+// --- Coordinate math (matching detection.js) ---
+
+function headingPitchToPixel(heading, pitch, imageWidth, imageHeight, panoHeading) {
+  let h = (heading - panoHeading + 180 + 360) % 360;
+  const x = (h / 360) * imageWidth;
+  const y = ((90 - pitch) / 180) * imageHeight;
+  return { x, y };
+}
+
+function headingPitchToPixelCorrected(heading, pitch, imageWidth, imageHeight, panoHeading, tilt) {
+  const deg2rad = Math.PI / 180;
+  const rad2deg = 180 / Math.PI;
+  const hRad = heading * deg2rad;
+  const pRad = pitch * deg2rad;
+  const cosP = Math.cos(pRad);
+  const dx = cosP * Math.sin(hRad);
+  const dy = cosP * Math.cos(hRad);
+  const dz = Math.sin(pRad);
+  const phRad = panoHeading * deg2rad;
+  const cosPh = Math.cos(phRad);
+  const sinPh = Math.sin(phRad);
+  const localX = dx * cosPh - dy * sinPh;
+  const localY = dx * sinPh + dy * cosPh;
+  const localZ = dz;
+  const alpha = (tilt - 90) * deg2rad;
+  const cosA = Math.cos(alpha);
+  const sinA = Math.sin(alpha);
+  const stabX = localX;
+  const stabY = cosA * localY + sinA * localZ;
+  const stabZ = -sinA * localY + cosA * localZ;
+  const stabRelHDeg = Math.atan2(stabX, stabY) * rad2deg;
+  const stabPitchDeg = Math.asin(Math.max(-1, Math.min(1, stabZ))) * rad2deg;
+  const x = ((stabRelHDeg + 180) / 360) * imageWidth;
+  const y = ((90 - stabPitchDeg) / 180) * imageHeight;
+  const yBase = ((90 - pitch) / 180) * imageHeight;
+  const yCorrection = y - yBase;
+  return { x, y, yCorrection };
+}
+
+function angularToPixelSize(angW, angH, imageWidth, imageHeight) {
+  return { width: (angW / 360) * imageWidth, height: (angH / 180) * imageHeight };
+}
+
+// --- Load and display ---
+
+async function loadDetection(index) {
+  if (index < 0 || index >= detections.length) return;
+  currentIndex = index;
+  updateCounter();
+
+  const det = detections[index];
+  const panoHeading = det.panoHeading ?? 0;
+  const tilt = det.tilt ?? 90;
+
+  infoMeta.textContent =
+    `pano=${det.panoId} h=${det.heading?.toFixed(1)} p=${det.pitch?.toFixed(1)} ` +
+    `angW=${det.angularWidth?.toFixed(2)} angH=${det.angularHeight?.toFixed(2)} ` +
+    `tilt=${tilt?.toFixed(1)} panoH=${panoHeading?.toFixed(1)} conf=${det.confidence?.toFixed(2)}`;
+
+  updateAnnotationInfo();
+
+  // Equirectangular: compute both corrected and uncorrected positions
+  const corrected = headingPitchToPixelCorrected(
+    det.heading, det.pitch, TILE_GRID_W, TILE_GRID_H, panoHeading, tilt
+  );
+  const uncorrected = headingPitchToPixel(
+    det.heading, det.pitch, TILE_GRID_W, TILE_GRID_H, panoHeading
+  );
+  const signSize = angularToPixelSize(det.angularWidth, det.angularHeight, TILE_GRID_W, TILE_GRID_H);
+  const halfW = Math.max(signSize.width * 2, EQ_CROP_MARGIN);
+  const halfH = Math.max(signSize.height * 2, EQ_CROP_MARGIN);
+
+  // Fetch tiles covering BOTH corrected and uncorrected positions
+  const x1 = Math.floor(Math.min(corrected.x, uncorrected.x) - halfW);
+  const y1 = Math.floor(Math.min(corrected.y, uncorrected.y) - halfH);
+  const x2 = Math.ceil(Math.max(corrected.x, uncorrected.x) + halfW);
+  const y2 = Math.ceil(Math.max(corrected.y, uncorrected.y) + halfH);
+
+  const tileX1 = Math.max(0, Math.floor(x1 / TILE_SIZE));
+  const tileY1 = Math.max(0, Math.floor(y1 / TILE_SIZE));
+  const tileX2 = Math.min(31, Math.floor(x2 / TILE_SIZE));
+  const tileY2 = Math.min(15, Math.floor(y2 / TILE_SIZE));
+
+  statusEl.textContent = "Loading tiles...";
+
+  try {
+    const sess = await getSession();
+    const stitchW = (tileX2 - tileX1 + 1) * TILE_SIZE;
+    const stitchH = (tileY2 - tileY1 + 1) * TILE_SIZE;
+
+    // Fetch tiles in parallel
+    const tilePromises = [];
+    for (let ty = tileY1; ty <= tileY2; ty++) {
+      for (let tx = tileX1; tx <= tileX2; tx++) {
+        tilePromises.push(
+          fetchTileImage(det.panoId, tx, ty, sess).then((img) => ({ tx, ty, img }))
+        );
+      }
+    }
+    const tiles = await Promise.all(tilePromises);
+
+    // Create offscreen canvas for stitching
+    const offscreen = new OffscreenCanvas(stitchW, stitchH);
+    const octx = offscreen.getContext("2d");
+    for (const { tx, ty, img } of tiles) {
+      if (img) {
+        octx.drawImage(img, (tx - tileX1) * TILE_SIZE, (ty - tileY1) * TILE_SIZE);
+      }
+    }
+
+    const originX = tileX1 * TILE_SIZE;
+    const originY = tileY1 * TILE_SIZE;
+    const correctedLocalX = corrected.x - originX;
+    const correctedLocalY = corrected.y - originY;
+    // Center view on uncorrected position (closer to truth when tilt correction fails)
+    const viewX = uncorrected.x - originX;
+    const viewY = uncorrected.y - originY;
+
+    currentEqImage = {
+      bitmap: offscreen.transferToImageBitmap(),
+      originX, originY,
+      predX: correctedLocalX, predY: correctedLocalY,
+      viewX, viewY,
+      signW: signSize.width, signH: signSize.height,
+      correctedGlobalX: corrected.x, correctedGlobalY: corrected.y,
+      yCorrection: corrected.yCorrection,
+    };
+    drawEqCanvas();
+  } catch (e) {
+    statusEl.textContent = `Tile error: ${e.message}`;
+    currentEqImage = null;
+    clearCanvas(eqCtx, eqCanvas);
+  }
+
+  // Gnomonic: fetch static Street View image centered on detection
+  try {
+    const key = getApiKey();
+    const url =
+      `https://maps.googleapis.com/maps/api/streetview?` +
+      `size=${GN_IMG_SIZE}x${GN_IMG_SIZE}&pano=${det.panoId}` +
+      `&heading=${det.detectionHeading}&pitch=${det.detectionPitch}&fov=${det.detectionFov}&key=${key}`;
+
+    statusEl.textContent = "Loading static image...";
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`Static API ${resp.status}`);
+    const blob = await resp.blob();
+    const bitmap = await createImageBitmap(blob);
+
+    // Compute bbox in gnomonic image from angular coords
+    const gnBbox = computeGnomonicBbox(det);
+
+    currentGnImage = { bitmap, bbox: gnBbox };
+    drawGnCanvas();
+  } catch (e) {
+    statusEl.textContent = `Static error: ${e.message}`;
+    currentGnImage = null;
+    clearCanvas(gnCtx, gnCanvas);
+  }
+
+  statusEl.textContent = skipped.has(index) ? "Skipped" : annotations[index] ? "Annotated" : "Ready";
+}
+
+function computeGnomonicBbox(det) {
+  // Convert detection angular center back to pixels in the gnomonic image
+  // The gnomonic image is centered on (detectionHeading, detectionPitch) with detectionFov
+  const imgW = GN_IMG_SIZE, imgH = GN_IMG_SIZE;
+  const f = (imgW / 2) / Math.tan((det.detectionFov / 2) * Math.PI / 180);
+
+  const toRad = (d) => d * Math.PI / 180;
+  const h0 = toRad(det.detectionHeading);
+  const p0 = toRad(det.detectionPitch);
+
+  function angularToScreen(heading, pitch) {
+    const h = toRad(heading);
+    const p = toRad(pitch);
+    // 3D direction
+    const dx = Math.cos(p) * Math.sin(h);
+    const dy = Math.cos(p) * Math.cos(h);
+    const dz = Math.sin(p);
+    // POV center direction
+    const cx = Math.cos(p0) * Math.sin(h0);
+    const cy = Math.cos(p0) * Math.cos(h0);
+    const cz = Math.sin(p0);
+    // Dot product for depth
+    const dot = dx * cx + dy * cy + dz * cz;
+    if (dot <= 0) return null;
+    // Image plane basis (matching PanoMarker)
+    const ux = Math.cos(h0), uy = -Math.sin(h0), uz = 0;
+    const vx = -Math.sin(p0) * Math.sin(h0), vy = -Math.sin(p0) * Math.cos(h0), vz = Math.cos(p0);
+    // Project
+    const scale = f / dot;
+    const du = (dx * ux + dy * uy + dz * uz) * scale;
+    const dv = (dx * vx + dy * vy + dz * vz) * scale;
+    return { x: imgW / 2 + du, y: imgH / 2 - dv };
+  }
+
+  const angH = det.angularWidth / 2;
+  const angV = det.angularHeight / 2;
+  const tl = angularToScreen(det.heading - angH, det.pitch + angV);
+  const br = angularToScreen(det.heading + angH, det.pitch - angV);
+
+  if (!tl || !br) return null;
+  return { x1: tl.x, y1: tl.y, x2: br.x, y2: br.y };
+}
+
+function clearCanvas(ctx, canvas) {
+  canvas.width = canvas.clientWidth * devicePixelRatio;
+  canvas.height = canvas.clientHeight * devicePixelRatio;
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+  ctx.fillStyle = "#1a1a1a";
+  ctx.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+}
+
+function drawEqCanvas() {
+  const cw = eqCanvas.clientWidth, ch = eqCanvas.clientHeight;
+  eqCanvas.width = cw * devicePixelRatio;
+  eqCanvas.height = ch * devicePixelRatio;
+  eqCtx.scale(devicePixelRatio, devicePixelRatio);
+
+  if (!currentEqImage) {
+    eqCtx.fillStyle = "#1a1a1a";
+    eqCtx.fillRect(0, 0, cw, ch);
+    return;
+  }
+
+  const { bitmap, predX, predY, viewX, viewY, signW, signH } = currentEqImage;
+
+  // 1x zoom centered on uncorrected sign position
+  const scale = Math.min(cw / bitmap.width, ch / bitmap.height) * 1;
+
+  const offsetX = cw / 2 - viewX * scale;
+  const offsetY = ch / 2 - viewY * scale;
+
+  eqCtx.fillStyle = "#1a1a1a";
+  eqCtx.fillRect(0, 0, cw, ch);
+  eqCtx.drawImage(bitmap, offsetX, offsetY, bitmap.width * scale, bitmap.height * scale);
+
+  // Store transform for click mapping
+  currentEqImage._drawOffset = { x: offsetX, y: offsetY, scale };
+
+  // Draw predicted center crosshair (yellow)
+  const cx = offsetX + predX * scale;
+  const cy = offsetY + predY * scale;
+  eqCtx.strokeStyle = "yellow";
+  eqCtx.lineWidth = 2;
+  eqCtx.beginPath();
+  eqCtx.moveTo(cx - 20, cy); eqCtx.lineTo(cx + 20, cy);
+  eqCtx.moveTo(cx, cy - 20); eqCtx.lineTo(cx, cy + 20);
+  eqCtx.stroke();
+
+  // Draw predicted sign bbox (yellow dashed)
+  eqCtx.setLineDash([4, 4]);
+  eqCtx.strokeRect(
+    cx - signW * scale / 2, cy - signH * scale / 2,
+    signW * scale, signH * scale
+  );
+  eqCtx.setLineDash([]);
+
+  // Draw annotations
+  const ann = annotations[currentIndex];
+  if (ann?.eqTop) drawMarker(eqCtx, offsetX + ann.eqTop.localX * scale, offsetY + ann.eqTop.localY * scale, "#ff4444", "T");
+  if (ann?.eqBot) drawMarker(eqCtx, offsetX + ann.eqBot.localX * scale, offsetY + ann.eqBot.localY * scale, "#44aaff", "B");
+}
+
+function drawGnCanvas() {
+  const cw = gnCanvas.clientWidth, ch = gnCanvas.clientHeight;
+  gnCanvas.width = cw * devicePixelRatio;
+  gnCanvas.height = ch * devicePixelRatio;
+  gnCtx.scale(devicePixelRatio, devicePixelRatio);
+
+  if (!currentGnImage) {
+    gnCtx.fillStyle = "#1a1a1a";
+    gnCtx.fillRect(0, 0, cw, ch);
+    return;
+  }
+
+  const { bitmap, bbox } = currentGnImage;
+  // 5x zoom centered on bbox center (fallback to image center)
+  const focusX = bbox ? (bbox.x1 + bbox.x2) / 2 : bitmap.width / 2;
+  const focusY = bbox ? (bbox.y1 + bbox.y2) / 2 : bitmap.height / 2;
+  const scale = Math.min(cw / bitmap.width, ch / bitmap.height) * 5;
+
+  const offsetX = cw / 2 - focusX * scale;
+  const offsetY = ch / 2 - focusY * scale;
+
+  gnCtx.fillStyle = "#1a1a1a";
+  gnCtx.fillRect(0, 0, cw, ch);
+  gnCtx.drawImage(bitmap, offsetX, offsetY, bitmap.width * scale, bitmap.height * scale);
+
+  currentGnImage._drawOffset = { x: offsetX, y: offsetY, scale };
+
+  // Draw detection bbox (green)
+  if (bbox) {
+    gnCtx.strokeStyle = "#0f0";
+    gnCtx.lineWidth = 2;
+    gnCtx.strokeRect(
+      offsetX + bbox.x1 * scale, offsetY + bbox.y1 * scale,
+      (bbox.x2 - bbox.x1) * scale, (bbox.y2 - bbox.y1) * scale
+    );
+  }
+
+  // Draw annotations
+  const ann = annotations[currentIndex];
+  if (ann?.gnTop) drawMarker(gnCtx, offsetX + ann.gnTop.localX * scale, offsetY + ann.gnTop.localY * scale, "#ff4444", "T");
+  if (ann?.gnBot) drawMarker(gnCtx, offsetX + ann.gnBot.localX * scale, offsetY + ann.gnBot.localY * scale, "#44aaff", "B");
+}
+
+function drawMarker(ctx, x, y, color, label) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x - 12, y); ctx.lineTo(x + 12, y);
+  ctx.moveTo(x, y - 12); ctx.lineTo(x, y + 12);
+  ctx.stroke();
+
+  ctx.fillStyle = color;
+  ctx.font = "bold 14px monospace";
+  ctx.fillText(label, x + 14, y + 5);
+}
+
+function updateCounter() {
+  const annotated = Object.keys(annotations).length;
+  counterEl.textContent = `${currentIndex + 1}/${detections.length} (${annotated} annotated)`;
+}
+
+function updateAnnotationInfo() {
+  const ann = annotations[currentIndex];
+  if (!ann) {
+    infoAnnotation.textContent = "No annotations yet";
+    return;
+  }
+  const parts = [];
+  if (ann.eqTop) parts.push(`eqT=(${ann.eqTop.globalX.toFixed(0)},${ann.eqTop.globalY.toFixed(0)})`);
+  if (ann.eqBot) parts.push(`eqB=(${ann.eqBot.globalX.toFixed(0)},${ann.eqBot.globalY.toFixed(0)})`);
+  if (ann.gnTop) parts.push(`gnT=(${ann.gnTop.localX.toFixed(0)},${ann.gnTop.localY.toFixed(0)})`);
+  if (ann.gnBot) parts.push(`gnB=(${ann.gnBot.localX.toFixed(0)},${ann.gnBot.localY.toFixed(0)})`);
+  infoAnnotation.textContent = parts.join(" | ");
+}
+
+// --- Click handlers ---
+
+let pendingClick = null; // { panel: "eq"|"gn", localX, localY, globalX?, globalY? }
+
+function canvasClickToLocal(e, canvas, imgState) {
+  if (!imgState?._drawOffset) return null;
+  const rect = canvas.getBoundingClientRect();
+  const canvasX = e.clientX - rect.left;
+  const canvasY = e.clientY - rect.top;
+  const { x: offX, y: offY, scale } = imgState._drawOffset;
+  const localX = (canvasX - offX) / scale;
+  const localY = (canvasY - offY) / scale;
+  return { localX, localY };
+}
+
+function applyPending(marker) {
+  if (!pendingClick) return;
+  if (!annotations[currentIndex]) annotations[currentIndex] = {};
+  const p = pendingClick;
+  const suffix = marker; // "Top" or "Bot"
+
+  if (p.panel === "eq") {
+    annotations[currentIndex]["eq" + suffix] = { localX: p.localX, localY: p.localY, globalX: p.globalX, globalY: p.globalY };
+    drawEqCanvas();
+  } else {
+    annotations[currentIndex]["gn" + suffix] = { localX: p.localX, localY: p.localY };
+    drawGnCanvas();
+  }
+  updateAnnotationInfo();
+  updateCounter();
+}
+
+eqCanvas.addEventListener("click", (e) => {
+  if (!currentEqImage) return;
+  const local = canvasClickToLocal(e, eqCanvas, currentEqImage);
+  if (!local) return;
+  const globalX = local.localX + currentEqImage.originX;
+  const globalY = local.localY + currentEqImage.originY;
+  pendingClick = { panel: "eq", localX: local.localX, localY: local.localY, globalX, globalY };
+  statusEl.textContent = "Press T (top) or B (bottom) to confirm";
+  drawEqCanvas();
+  // Draw pending marker (white ring)
+  const { _drawOffset: d } = currentEqImage;
+  if (d) {
+    eqCtx.strokeStyle = "#fff";
+    eqCtx.lineWidth = 2;
+    eqCtx.beginPath();
+    eqCtx.arc(d.x + local.localX * d.scale, d.y + local.localY * d.scale, 8, 0, Math.PI * 2);
+    eqCtx.stroke();
+  }
+});
+
+gnCanvas.addEventListener("click", (e) => {
+  if (!currentGnImage) return;
+  const local = canvasClickToLocal(e, gnCanvas, currentGnImage);
+  if (!local) return;
+  pendingClick = { panel: "gn", localX: local.localX, localY: local.localY };
+  statusEl.textContent = "Press T (top) or B (bottom) to confirm";
+  drawGnCanvas();
+  const { _drawOffset: d } = currentGnImage;
+  if (d) {
+    gnCtx.strokeStyle = "#fff";
+    gnCtx.lineWidth = 2;
+    gnCtx.beginPath();
+    gnCtx.arc(d.x + local.localX * d.scale, d.y + local.localY * d.scale, 8, 0, Math.PI * 2);
+    gnCtx.stroke();
+  }
+});
+
+// --- Navigation ---
+
+function goNext() {
+  if (currentIndex < detections.length - 1) loadDetection(currentIndex + 1);
+}
+function goPrev() {
+  if (currentIndex > 0) loadDetection(currentIndex - 1);
+}
+function skipCurrent() {
+  skipped.add(currentIndex);
+  goNext();
+}
+
+prevBtn.addEventListener("click", goPrev);
+nextBtn.addEventListener("click", goNext);
+skipBtn.addEventListener("click", skipCurrent);
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowRight") goNext();
+  else if (e.key === "ArrowLeft") goPrev();
+  else if (e.key === "s" || e.key === "S") skipCurrent();
+  else if (e.key === "e" || e.key === "E") exportCSV();
+  else if (e.key === "t" || e.key === "T") { applyPending("Top"); pendingClick = null; }
+  else if (e.key === "b" || e.key === "B") { applyPending("Bot"); pendingClick = null; }
+});
+
+// --- File loading ---
+
+fileInput.addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  statusEl.textContent = "Loading...";
+  const text = await file.text();
+  const lines = text.trim().split("\n").filter(Boolean);
+  detections = lines.map((line) => {
+    try { return JSON.parse(line); }
+    catch { return null; }
+  }).filter(Boolean);
+
+  annotations = {};
+  skipped = new Set();
+  currentIndex = 0;
+  statusEl.textContent = `Loaded ${detections.length} detections`;
+  updateCounter();
+
+  if (detections.length > 0) loadDetection(0);
+});
+
+// --- Export ---
+
+function exportCSV() {
+  const header = [
+    "panoId", "heading", "pitch", "angW", "angH", "confidence",
+    "panoHeading", "tilt", "detectionHeading", "detectionPitch", "detectionFov",
+    "eq_top_x", "eq_top_y", "eq_bot_x", "eq_bot_y",
+    "gn_top_x", "gn_top_y", "gn_bot_x", "gn_bot_y",
+    "predicted_eq_x", "predicted_eq_y", "yCorrection",
+    "imageWidth", "imageHeight", "lat", "lon",
+  ].join(",");
+
+  const rows = [];
+  for (const [idx, ann] of Object.entries(annotations)) {
+    if (skipped.has(parseInt(idx))) continue;
+    const det = detections[parseInt(idx)];
+    if (!det) continue;
+
+    const panoHeading = det.panoHeading ?? 0;
+    const tilt = det.tilt ?? 90;
+    const corrected = headingPitchToPixelCorrected(
+      det.heading, det.pitch, TILE_GRID_W, TILE_GRID_H, panoHeading, tilt
+    );
+
+    rows.push([
+      det.panoId,
+      det.heading?.toFixed(3),
+      det.pitch?.toFixed(3),
+      det.angularWidth?.toFixed(4),
+      det.angularHeight?.toFixed(4),
+      det.confidence?.toFixed(3),
+      panoHeading.toFixed(2),
+      tilt.toFixed(2),
+      det.detectionHeading?.toFixed(2),
+      det.detectionPitch?.toFixed(2),
+      det.detectionFov,
+      ann.eqTop?.globalX?.toFixed(1) ?? "",
+      ann.eqTop?.globalY?.toFixed(1) ?? "",
+      ann.eqBot?.globalX?.toFixed(1) ?? "",
+      ann.eqBot?.globalY?.toFixed(1) ?? "",
+      ann.gnTop?.localX?.toFixed(1) ?? "",
+      ann.gnTop?.localY?.toFixed(1) ?? "",
+      ann.gnBot?.localX?.toFixed(1) ?? "",
+      ann.gnBot?.localY?.toFixed(1) ?? "",
+      corrected.x.toFixed(1),
+      corrected.y.toFixed(1),
+      corrected.yCorrection.toFixed(1),
+      TILE_GRID_W,
+      TILE_GRID_H,
+      det.lat?.toFixed(6) ?? "",
+      det.lon?.toFixed(6) ?? "",
+    ].join(","));
+  }
+
+  const csv = header + "\n" + rows.join("\n") + "\n";
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `tilt-annotations-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+
+  statusEl.textContent = `Exported ${rows.length} annotations`;
+}
+
+exportBtn.addEventListener("click", exportCSV);
+
+// --- Resize handler ---
+window.addEventListener("resize", () => {
+  if (currentEqImage) drawEqCanvas();
+  if (currentGnImage) drawGnCanvas();
+});
+</script>
+</body>
+</html>
