@@ -44,12 +44,13 @@ const LEAFLET_STUB = `
     addTo() { return this; }
     clearLayers() { this._layers = []; return this; }
     addLayer(layer) { this._layers.push(layer); return this; }
+    eachLayer(fn) { this._layers.forEach(fn); return this; }
   }
   function makeLayer(latlng, options = {}) {
     return {
       _latlng: latlng, options,
       addTo(group) { if (group && typeof group.addLayer === "function") group.addLayer(this); return this; },
-      bindPopup() { return this; }, bindTooltip() { return this; }, on() { return this; },
+      bindPopup() { return this; }, bindTooltip() { return this; }, on() { return this; }, openPopup() { return this; }, getPopup() { return null; },
       setLatLng(next) { this._latlng = next; return this; },
       setBounds(bounds) { this._bounds = bounds; return this; },
     };
@@ -92,23 +93,30 @@ const LEAFLET_STUB = `
 
 const GOOGLE_MAPS_STUB = `
 (() => {
-  class StreetViewPanorama {
-    constructor(container, options = {}) {
-      this._pano = options.pano || "mock-pano";
-      this._pov = options.pov || { heading: 270, pitch: 0, zoom: 1 };
-      const pos = window.__TEST_PANORAMA_POSITION || { lat: 42.3615, lng: -71.0921 };
-      this._position = pos;
+  const pos = window.__TEST_PANORAMA_POSITION || { lat: 42.3615, lng: -71.0921 };
+  class StreetViewService {
+    async getPanorama(request) {
+      return {
+        data: {
+          location: {
+            pano: request?.pano || "mock-pano",
+            latLng: { lat: () => pos.lat, lng: () => pos.lng },
+            description: "Mock panorama",
+          },
+          links: [
+            { pano: "linked-pano", heading: 90, description: "Linked panorama" },
+          ],
+        },
+      };
     }
-    set(name, value) { if (name === "zoom") this._pov = { ...this._pov, zoom: value }; }
-    setPano(pano) { this._pano = pano; }
-    getPano() { return this._pano; }
-    setPov(pov) { this._pov = { ...this._pov, ...pov }; }
-    getPov() { return this._pov; }
-    getPosition() { return { lat: () => this._position.lat, lng: () => this._position.lng }; }
-    getContainer() { return document.createElement("div"); }
-    addListener() { return { remove() {} }; }
   }
-  window.google = { maps: { StreetViewPanorama } };
+  window.google = {
+    maps: {
+      StreetViewService,
+      StreetViewPreference: { NEAREST: "NEAREST" },
+      StreetViewSource: { OUTDOOR: "OUTDOOR" },
+    },
+  };
   setTimeout(() => { if (typeof window.initApp === "function") window.initApp(); }, 0);
 })();
 `;
@@ -193,9 +201,16 @@ async function mockInfrastructure(page, options = {}) {
   await page.route("https://tile.googleapis.com/v1/createSession?**", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ session: "mock-session" }) }));
   await page.route("https://tile.googleapis.com/v1/streetview/panoIds?**", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ panoIds: ["mock-pano"] }) }));
   await page.route("https://tile.googleapis.com/v1/streetview/metadata?**", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ heading: 45, tilt: 90, roll: 0, imageWidth: 16384, imageHeight: 8192 }) }));
+  await page.route("https://tile.googleapis.com/v1/streetview/tiles/5/**", async (r) => {
+    await r.fulfill({
+      status: 200,
+      contentType: "image/png",
+      body: Buffer.from(PREVIEW_IMAGE_BASE64, "base64"),
+    });
+  });
   await page.route("https://overpass-api.de/api/interpreter", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ elements: fixtureWays }) }));
 
-  await page.route("http://127.0.0.1:8000/detect-single-pano", async (r) => {
+  await page.route("http://127.0.0.1:8000/detect-tiles", async (r) => {
     const resp = typeof detectPanoramaResponse === "function" ? detectPanoramaResponse(r.request()) : detectPanoramaResponse;
     await r.fulfill({ status: resp.status, contentType: resp.contentType || "application/json", body: resp.body });
   });
@@ -243,10 +258,22 @@ const ANGULAR_DETECTIONS_RESPONSE = {
   status: 200,
   body: JSON.stringify({
     detections: [
-      { heading: 47, pitch: -4.2, angular_width: 0.8, angular_height: 4.0, confidence: 0.87, class_name: "parking_sign", depth_anything_meters: 15.2, depth_anything_meters_raw: 15.0 },
-      { heading: 61, pitch: -3.1, angular_width: 0.7, angular_height: 3.0, confidence: 0.81, class_name: "parking_sign", depth_anything_meters: 12.8, depth_anything_meters_raw: 12.5 },
+      {
+        x1: 0, y1: 0, x2: 40, y2: 180,
+        full_pano_x1: 2508, full_pano_y1: 4200, full_pano_x2: 2548, full_pano_y2: 4380,
+        heading: 281, pitch: -4.2, angular_width: 0.8, angular_height: 4.0,
+        confidence: 0.87, class_name: "parking_sign",
+        depth_anything_meters: 15.2, depth_anything_meters_raw: 15.0,
+      },
+      {
+        x1: 60, y1: 10, x2: 98, y2: 160,
+        full_pano_x1: 3148, full_pano_y1: 4180, full_pano_x2: 3186, full_pano_y2: 4340,
+        heading: 295, pitch: -3.1, angular_width: 0.7, angular_height: 3.0,
+        confidence: 0.81, class_name: "parking_sign",
+        depth_anything_meters: 12.8, depth_anything_meters_raw: 12.5,
+      },
     ],
-    total_inference_time_ms: 55, slices_count: 3,
+    total_inference_time_ms: 55, stitched_width: 1024, stitched_height: 512, pano_heading: 45,
   }),
 };
 
@@ -500,13 +527,7 @@ test.describe("detection flow (real OSM data)", () => {
     await mockInfrastructure(page, {
       detectPanoramaResponse: {
         status: 200,
-        body: JSON.stringify({
-          detections: [
-            { heading: 47, pitch: -4.2, angular_width: 0.8, angular_height: 4.0, confidence: 0.87, class_name: "parking_sign", depth_anything_meters: 15.2, depth_anything_meters_raw: 15.0 },
-            { heading: 61, pitch: -3.1, angular_width: 0.7, angular_height: 3.0, confidence: 0.81, class_name: "parking_sign", depth_anything_meters: 12.8, depth_anything_meters_raw: 12.5 },
-          ],
-          total_inference_time_ms: 55, slices_count: 3,
-        }),
+        body: ANGULAR_DETECTIONS_RESPONSE.body,
       },
     });
 
@@ -534,7 +555,13 @@ test.describe("detection flow (real OSM data)", () => {
     await expect(page.locator("#detectionStatus")).toContainText("Found 2 sign(s)", { timeout: 10000 });
 
     const projection = await page.evaluate(() => JSON.parse(localStorage.getItem("parksight_latest_sign_map_data")));
-    const signs = projection.detections[0].signs;
+    const signs = projection.detections[0].signs.filter((sign, index, all) => {
+      const key = `${sign.heading?.toFixed?.(2) ?? sign.heading}:${sign.lat?.toFixed?.(6) ?? sign.lat}:${sign.lng?.toFixed?.(6) ?? sign.lng}`;
+      return index === all.findIndex((candidate) => {
+        const candidateKey = `${candidate.heading?.toFixed?.(2) ?? candidate.heading}:${candidate.lat?.toFixed?.(6) ?? candidate.lat}:${candidate.lng?.toFixed?.(6) ?? candidate.lng}`;
+        return candidateKey === key;
+      });
+    });
     expect(signs).toHaveLength(2);
 
     const wayGeometry = projection.detections[0].wayGeometry;
