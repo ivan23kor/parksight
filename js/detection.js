@@ -10,6 +10,9 @@ let detectionPov = { heading: 0, pitch: 0, zoom: 1 }; // POV when detection was 
 let povChangeListener = null;
 let panoChangeListener = null;
 let positionChangeListener = null;
+let detectionOverlayResizeObserver = null;
+let detectionOverlayResizeCleanup = null;
+let detectionOverlayUpdateFrame = null;
 // Track document-level event listeners for proper cleanup
 const documentEventListeners = [];
 const panoramaLinkSpotPositionCache = new Map();
@@ -154,9 +157,9 @@ function getTilesForRegion(
 
   // Calculate tile coordinates
   const tileX1 = Math.floor(x1 / TILE_SIZE);
-  const tileY1 = Math.floor(y1 / TILE_SIZE);
+  const tileY1 = Math.max(0, Math.floor(y1 / TILE_SIZE));
   const tileX2 = Math.floor(x2 / TILE_SIZE);
-  const tileY2 = Math.floor(y2 / TILE_SIZE);
+  const tileY2 = Math.min(15, Math.floor(y2 / TILE_SIZE));
 
   // Collect all tiles needed
   const tiles = [];
@@ -178,6 +181,145 @@ function getTilesForRegion(
   };
 
   return { tiles, tileX1, tileY1, cropBounds };
+}
+
+function normalizePanoPixelX(x, imageWidth = TILE_GRID_WIDTH) {
+  return ((x % imageWidth) + imageWidth) % imageWidth;
+}
+
+function wrapPixelDelta(delta, imageWidth = TILE_GRID_WIDTH) {
+  let wrapped = delta % imageWidth;
+  if (wrapped > imageWidth / 2) wrapped -= imageWidth;
+  if (wrapped < -imageWidth / 2) wrapped += imageWidth;
+  return wrapped;
+}
+
+function getDetectionHorizonHalfBandDegrees() {
+  return window.DETECTION_CONFIG?.HORIZON_HALF_BAND_DEGREES ?? 10;
+}
+
+function getDetectionViewportRect() {
+  if (typeof detectionPanorama?.getViewportRect === "function") {
+    return detectionPanorama.getViewportRect();
+  }
+
+  const container = document.getElementById("detectionPanorama");
+  const width = container?.clientWidth || 1;
+  const height = container?.clientHeight || 1;
+  const pov = detectionPanorama?.getPov?.() || { heading: 0, pitch: 0, zoom: 1 };
+  const fov = zoomToFov(pov.zoom || 1);
+  const halfBandDegrees = getDetectionHorizonHalfBandDegrees();
+  const center = headingPitchToPixel(
+    pov.heading,
+    0,
+    TILE_GRID_WIDTH,
+    TILE_GRID_HEIGHT,
+    detectionPanorama?._panoHeading || 0,
+  );
+  const topBandPoint = headingPitchToPixel(
+    pov.heading,
+    halfBandDegrees,
+    TILE_GRID_WIDTH,
+    TILE_GRID_HEIGHT,
+    detectionPanorama?._panoHeading || 0,
+  );
+  const bottomBandPoint = headingPitchToPixel(
+    pov.heading,
+    -halfBandDegrees,
+    TILE_GRID_WIDTH,
+    TILE_GRID_HEIGHT,
+    detectionPanorama?._panoHeading || 0,
+  );
+  const bandHeight = Math.max(1, Math.abs(bottomBandPoint.y - topBandPoint.y));
+  const sourceAspect = ((fov / 360) * TILE_GRID_WIDTH) / bandHeight;
+  let drawWidth = width;
+  let drawHeight = drawWidth / sourceAspect;
+  if (drawHeight > height) {
+    drawHeight = height;
+    drawWidth = drawHeight * sourceAspect;
+  }
+  const drawLeft = (width - drawWidth) / 2;
+  const drawTop = (height - drawHeight) / 2;
+  return {
+    centerX: center.x,
+    centerY: (topBandPoint.y + bottomBandPoint.y) / 2,
+    width: (fov / 360) * TILE_GRID_WIDTH,
+    height: bandHeight,
+    canvasWidth: width,
+    canvasHeight: height,
+    hFov: fov,
+    vFov: halfBandDegrees * 2,
+    drawLeft,
+    drawTop,
+    drawWidth,
+    drawHeight,
+    panoWidth: TILE_GRID_WIDTH,
+    panoHeight: TILE_GRID_HEIGHT,
+  };
+}
+
+function panoPixelToScreenPoint(x, y) {
+  if (typeof detectionPanorama?.panoPixelToScreen === "function") {
+    return detectionPanorama.panoPixelToScreen(x, y);
+  }
+
+  const rect = getDetectionViewportRect();
+  const dx = wrapPixelDelta(x - rect.centerX, rect.panoWidth);
+  const dy = y - rect.centerY;
+  return {
+    x: rect.drawLeft + rect.drawWidth / 2 + (dx / rect.width) * rect.drawWidth,
+    y: rect.drawTop + rect.drawHeight / 2 + (dy / rect.height) * rect.drawHeight,
+  };
+}
+
+function screenToPanoPixelPoint(screenX, screenY) {
+  if (typeof detectionPanorama?.screenToPanoPixel === "function") {
+    return detectionPanorama.screenToPanoPixel(screenX, screenY);
+  }
+
+  const rect = getDetectionViewportRect();
+  return {
+    x:
+      rect.centerX +
+      ((screenX - (rect.drawLeft + rect.drawWidth / 2)) / rect.drawWidth) * rect.width,
+    y:
+      rect.centerY +
+      ((screenY - (rect.drawTop + rect.drawHeight / 2)) / rect.drawHeight) * rect.height,
+  };
+}
+
+function scheduleDetectionOverlayUpdate() {
+  if (detectionOverlayUpdateFrame != null) {
+    return;
+  }
+
+  detectionOverlayUpdateFrame = window.requestAnimationFrame(() => {
+    detectionOverlayUpdateFrame = null;
+    updateDetectionOverlay();
+  });
+}
+
+function tileDetectionToScreen(det, screenWidth, screenHeight) {
+  if (
+    !Number.isFinite(det?.tileX1) ||
+    !Number.isFinite(det?.tileY1) ||
+    !Number.isFinite(det?.tileX2) ||
+    !Number.isFinite(det?.tileY2)
+  ) {
+    return null;
+  }
+
+  const topLeft = panoPixelToScreenPoint(det.tileX1, det.tileY1);
+  const bottomRight = panoPixelToScreenPoint(det.tileX2, det.tileY2);
+  const x = Math.min(topLeft.x, bottomRight.x);
+  const y = Math.min(topLeft.y, bottomRight.y);
+  const width = Math.abs(bottomRight.x - topLeft.x);
+  const height = Math.abs(bottomRight.y - topLeft.y);
+
+  if (x + width < 0 || x > screenWidth) return null;
+  if (y + height < 0 || y > screenHeight) return null;
+
+  return { x, y, width, height };
 }
 
 /**
@@ -237,6 +379,18 @@ function mergeAngularDetections(detections) {
   }
 
   const normalizedDetections = detections.map(normalizeAngularDetection);
+  const tileXs1 = normalizedDetections
+    .map((det) => det.tileX1)
+    .filter((value) => Number.isFinite(value));
+  const tileYs1 = normalizedDetections
+    .map((det) => det.tileY1)
+    .filter((value) => Number.isFinite(value));
+  const tileXs2 = normalizedDetections
+    .map((det) => det.tileX2)
+    .filter((value) => Number.isFinite(value));
+  const tileYs2 = normalizedDetections
+    .map((det) => det.tileY2)
+    .filter((value) => Number.isFinite(value));
   let heading = detections[0].heading;
   let pitch = detections[0].pitch;
   let minPitch = detections[0].pitch - detections[0].angularHeight / 2;
@@ -369,6 +523,10 @@ function mergeAngularDetections(detections) {
     distanceAngularWidth: representativeWidth,
     mergeStackFactor,
     referenceHeightCm,
+    tileX1: tileXs1.length ? Math.min(...tileXs1) : undefined,
+    tileY1: tileYs1.length ? Math.min(...tileYs1) : undefined,
+    tileX2: tileXs2.length ? Math.max(...tileXs2) : undefined,
+    tileY2: tileYs2.length ? Math.max(...tileYs2) : undefined,
   });
 }
 
@@ -1058,6 +1216,8 @@ function updateDetectionOverlay() {
   const width = container.clientWidth;
   const height = container.clientHeight;
   const fov = zoomToFov(pov.zoom || 1);
+  overlay.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  overlay.setAttribute("preserveAspectRatio", "none");
 
   // Clear existing boxes (but keep markers)
   overlay.querySelectorAll(":not(.sign-marker)").forEach((el) => el.remove());
@@ -1067,14 +1227,16 @@ function updateDetectionOverlay() {
 
   // Draw each detection if visible
   for (const det of currentDetections) {
-    const screen = angularToScreen(
-      det,
-      pov.heading,
-      pov.pitch,
-      fov,
-      width,
-      height,
-    );
+    const screen =
+      tileDetectionToScreen(det, width, height) ||
+      angularToScreen(
+        det,
+        pov.heading,
+        pov.pitch,
+        fov,
+        width,
+        height,
+      );
     if (!screen) continue;
 
     // Color based on confidence
@@ -1122,14 +1284,13 @@ function updateDetectionOverlay() {
       }
 
       // Otherwise, save sign
-      const clickAngular = screenToAngular(
-        clickX,
-        clickY,
-        pov.heading,
-        pov.pitch,
-        fov,
-        width,
-        height,
+      const clickPixel = screenToPanoPixelPoint(clickX, clickY);
+      const clickAngular = pixelToHeadingPitch(
+        normalizePanoPixelX(clickPixel.x),
+        clickPixel.y,
+        TILE_GRID_WIDTH,
+        TILE_GRID_HEIGHT,
+        detectionPanorama?._panoHeading || 0,
       );
 
       cropAndSaveSign(det, {
@@ -1228,18 +1389,20 @@ function renderPanoramaLinkSpotsOverlay(overlay, pov, fov, width, height) {
       continue;
     }
 
-    const screen = projectWorldPointToScreen(
-      linkSpot.lat,
-      linkSpot.lng,
-      PANORAMA_LINK_SPOT_HEIGHT_METERS,
+    const linkHeading = bearingBetweenPoints(
       cameraLat,
       cameraLng,
-      pov.heading,
-      pov.pitch,
-      fov,
-      width,
-      height,
+      linkSpot.lat,
+      linkSpot.lng,
     );
+    const linkPx = headingPitchToPixel(
+      linkHeading,
+      0,
+      TILE_GRID_WIDTH,
+      TILE_GRID_HEIGHT,
+      detectionPanorama?._panoHeading || 0,
+    );
+    const screen = panoPixelToScreenPoint(linkPx.x, linkPx.y);
     if (!screen) {
       continue;
     }
@@ -1369,22 +1532,30 @@ function initDetectionPanorama(panoId, heading, container) {
   const pov = getDefaultPov(heading);
 
   if (detectionPanorama) {
-    detectionPanorama.setPano(panoId);
+    Promise.resolve(detectionPanorama.setPano(panoId)).catch((err) => {
+      console.error("Failed to update tile panorama:", err);
+    });
     detectionPanorama.setPov(pov);
   } else {
-    detectionPanorama = new google.maps.StreetViewPanorama(container, {
-      pano: panoId,
-      pov,
-      zoom: PANORAMA_DEFAULTS.zoom,
-      addressControl: false,
-      showRoadLabels: false,
-      motionTracking: false,
-      motionTrackingControl: false,
-      linksControl: false,
-      panControl: true,
-      zoomControl: true,
-      fullscreenControl: false,
-    });
+    detectionPanorama = new TileViewer(container, { pov });
+
+    if (!detectionOverlayResizeObserver) {
+      detectionOverlayResizeObserver =
+        typeof ResizeObserver === "function"
+          ? new ResizeObserver(() => {
+              scheduleDetectionOverlayUpdate();
+            })
+          : null;
+      detectionOverlayResizeObserver?.observe(container);
+
+      const handleWindowResize = () => {
+        scheduleDetectionOverlayUpdate();
+      };
+      window.addEventListener("resize", handleWindowResize);
+      detectionOverlayResizeCleanup = () => {
+        window.removeEventListener("resize", handleWindowResize);
+      };
+    }
 
     povChangeListener = detectionPanorama.addListener(
       "pov_changed",
@@ -1440,6 +1611,10 @@ function initDetectionPanorama(panoId, heading, container) {
     documentEventListeners.push({ event: "keydown", handler: handleMarkerKeyboard });
   }
 
+  Promise.resolve(detectionPanorama.setPano?.(panoId)).catch((err) => {
+    console.error("Failed to set tile panorama:", err);
+  });
+  detectionPanorama.setPov(pov);
   currentDetections = [];
   updateDetectionOverlay();
 }
@@ -1473,6 +1648,37 @@ function clearDetections() {
 /**
  * Run detection on a single panorama view.
  */
+function isTileDetectionInViewport(det, viewportRect) {
+  if (!viewportRect) return true;
+  const centerX = (det.tileX1 + det.tileX2) / 2;
+  const centerY = (det.tileY1 + det.tileY2) / 2;
+  const dx = wrapPixelDelta(centerX - viewportRect.centerX, TILE_GRID_WIDTH);
+  const dy = centerY - viewportRect.centerY;
+  return Math.abs(dx) <= viewportRect.width / 2 && Math.abs(dy) <= viewportRect.height / 2;
+}
+
+function mapTileDetection(det) {
+  return {
+    heading: det.heading,
+    pitch: det.pitch,
+    angularWidth: det.angular_width,
+    angularHeight: det.angular_height,
+    confidence: det.confidence,
+    class_name: det.class_name,
+    depthAnythingMeters: det.depth_anything_meters,
+    depthAnythingMetersRaw: det.depth_anything_meters_raw,
+    depthCalibrated: det.depth_calibrated,
+    inferredPanelLayout: det.inferred_panel_layout,
+    referenceHeightCm: det.reference_height_cm,
+    pixelSize: det.pixel_size,
+    sizeCorrection: det.size_correction,
+    tileX1: det.full_pano_x1,
+    tileY1: det.full_pano_y1,
+    tileX2: det.full_pano_x2,
+    tileY2: det.full_pano_y2,
+  };
+}
+
 async function runSinglePanoApiDetection(panoId, heading, pitch, fov, statusEl) {
   const apiUrl = window.DETECTION_CONFIG?.API_URL;
   const apiKey = window.GOOGLE_CONFIG?.API_KEY;
@@ -1482,36 +1688,132 @@ async function runSinglePanoApiDetection(panoId, heading, pitch, fov, statusEl) 
 
   const conf = window.DETECTION_CONFIG?.CONFIDENCE_THRESHOLD ?? 0.15;
 
-  if (statusEl)
+  if (statusEl) {
     statusEl.textContent = "Detecting parking signs...";
+  }
+
+  const session = await getSessionToken();
+  const metadata = await fetchStreetViewMetadata(panoId, session);
+  const panoHeading = metadata?.heading || 0;
+  const container = document.getElementById("detectionPanorama");
+  const canvasWidth = container?.clientWidth || 640;
+  const canvasHeight = container?.clientHeight || 640;
+  const center = headingPitchToPixel(
+    heading,
+    pitch,
+    TILE_GRID_WIDTH,
+    TILE_GRID_HEIGHT,
+    panoHeading,
+  );
+  const viewportRect = {
+    centerX: center.x,
+    centerY: center.y,
+    width: (fov / 360) * TILE_GRID_WIDTH,
+  };
+  const horizonHalfBandDegrees = getDetectionHorizonHalfBandDegrees();
+  const detectionBandCenterPitch = 0;
+  const detectionBandTopPitch =
+    detectionBandCenterPitch + horizonHalfBandDegrees;
+  const detectionBandBottomPitch =
+    detectionBandCenterPitch - horizonHalfBandDegrees;
+  const topBandPoint = headingPitchToPixel(
+    heading,
+    detectionBandTopPitch,
+    TILE_GRID_WIDTH,
+    TILE_GRID_HEIGHT,
+    panoHeading,
+  );
+  const bottomBandPoint = headingPitchToPixel(
+    heading,
+    detectionBandBottomPitch,
+    TILE_GRID_WIDTH,
+    TILE_GRID_HEIGHT,
+    panoHeading,
+  );
+  const detectionBandY1 = Math.max(
+    0,
+    Math.min(topBandPoint.y, bottomBandPoint.y),
+  );
+  const detectionBandY2 = Math.min(
+    TILE_GRID_HEIGHT - 1,
+    Math.max(topBandPoint.y, bottomBandPoint.y),
+  );
+  const minTileX = Math.floor((viewportRect.centerX - viewportRect.width / 2) / TILE_SIZE);
+  const maxTileX = Math.floor((viewportRect.centerX + viewportRect.width / 2) / TILE_SIZE);
+  const minTileY = Math.max(0, Math.floor(detectionBandY1 / TILE_SIZE));
+  const maxTileY = Math.min(15, Math.floor(detectionBandY2 / TILE_SIZE));
+  const tiles = [];
+  for (let ty = minTileY; ty <= maxTileY; ty += 1) {
+    for (let tx = minTileX; tx <= maxTileX; tx += 1) {
+      tiles.push({ x: tx, y: ty });
+    }
+  }
 
   let resp;
   try {
-    resp = await fetch(`${apiUrl}/detect-single-pano`, {
+    resp = await fetch(`${apiUrl}/detect-tiles`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         pano_id: panoId,
-        heading: heading,
-        pitch: pitch,
-        fov: fov,
-        confidence: conf,
+        tiles,
+        tile_x1: minTileX,
+        tile_y1: minTileY,
+        session_token: session,
         api_key: apiKey,
-        img_width: 640,
-        img_height: 640,
+        confidence: conf,
+        request_heading: heading,
+        request_pitch: pitch,
+        request_fov: fov,
+        viewport_width: canvasWidth,
+        viewport_height: canvasHeight,
+        detection_band_center_pitch: detectionBandCenterPitch,
+        detection_band_half_height_degrees: horizonHalfBandDegrees,
+        detection_band_top_pitch: detectionBandTopPitch,
+        detection_band_bottom_pitch: detectionBandBottomPitch,
       }),
     });
   } catch (err) {
-    console.error("Single-pano detection request failed:", err);
+    console.error("Tile detection request failed:", err);
     throw new Error("Can't reach detection API. Make sure backend is running.");
   }
 
   if (!resp.ok) {
     const errorText = await resp.text();
-    throw new Error(`Single-pano detection failed: ${resp.status} - ${errorText}`);
+    throw new Error(`Tile detection failed: ${resp.status} - ${errorText}`);
   }
 
-  return resp.json();
+  const result = await resp.json();
+  const usageSummary = {
+    panoId,
+    heading,
+    pitch,
+    fov,
+    requestedTiles: tiles.length,
+    stitchedWidth: result?.stitched_width,
+    stitchedHeight: result?.stitched_height,
+    tileApiRequests: result?.tile_api_requests,
+    detectionBand: {
+      centerPitch: detectionBandCenterPitch,
+      halfHeightDegrees: horizonHalfBandDegrees,
+      topPitch: detectionBandTopPitch,
+      bottomPitch: detectionBandBottomPitch,
+    },
+    viewport: { width: canvasWidth, height: canvasHeight },
+  };
+  console.info("[detect-tiles] usage", usageSummary);
+  if (result?.debug_artifact) {
+    console.info("[detect-tiles] debug artifact", {
+      ...usageSummary,
+      stitchedImageUrl: result.debug_artifact.image_url,
+      metadataUrl: result.debug_artifact.metadata_url,
+      tileImageUrls: result.debug_artifact.tile_image_urls,
+    });
+  }
+  return {
+    ...result,
+    detections: (result.detections || []).map(mapTileDetection),
+  };
 }
 
 
@@ -1548,34 +1850,38 @@ async function runDetectionOnPanorama(
     );
 
     currentDetections = clusterAngularDetections(
-      result.detections.map((det) => ({
-        heading: det.heading,
-        pitch: det.pitch,
-        angularWidth: det.angular_width,
-        angularHeight: det.angular_height,
-        confidence: det.confidence,
-        class_name: det.class_name,
-        depthAnythingMeters: det.depth_anything_meters,
-        depthAnythingMetersRaw: det.depth_anything_meters_raw,
-        depthCalibrated: det.depth_calibrated,
-        inferredPanelLayout: det.inferred_panel_layout,
-        referenceHeightCm: det.reference_height_cm,
-        pixelSize: det.pixel_size,
-        sizeCorrection: det.size_correction,
-      })),
+      result.detections,
     );
 
-    detectionPov = { heading: detectHeading, pitch, fov };
+    detectionPov =
+      useCurrentPov && detectionPanorama
+        ? detectionPanorama.getPov()
+        : { heading: detectHeading, pitch, zoom: PANORAMA_DEFAULTS.zoom };
     updateDetectionOverlay();
 
     const count = currentDetections.length;
     const timeMs = result.total_inference_time_ms;
+    const requestedTiles = Number.isFinite(result?.tiles_count)
+      ? result.tiles_count
+      : null;
+    const tileApiRequests = Number.isFinite(result?.tile_api_requests)
+      ? result.tile_api_requests
+      : null;
+    const usageSuffix =
+      requestedTiles != null || tileApiRequests != null
+        ? ` | tiles requested: ${requestedTiles ?? "?"}, fetched: ${tileApiRequests ?? "?"}`
+        : "";
 
     // Run OCR on all detections (async, non-blocking)
     if (count > 0) {
+      if (statusEl) {
+        statusEl.textContent =
+          `Found ${count} sign(s) (${timeMs.toFixed(0)}ms)${usageSuffix}`;
+      }
       runOcrOnAllDetections();
     } else if (statusEl) {
-      statusEl.textContent = `No parking signs detected (${timeMs.toFixed(0)}ms)`;
+      statusEl.textContent =
+        `No parking signs detected (${timeMs.toFixed(0)}ms)${usageSuffix}`;
     }
 
     return result;
@@ -1835,7 +2141,7 @@ async function cropAndSaveSign(det, cropCenterOverride = null) {
     return;
   }
 
-  if (statusEl) statusEl.textContent = "Fetching crops (tiles + static)...";
+  if (statusEl) statusEl.textContent = "Fetching tile crop...";
 
   try {
     const cropPlan = await buildDetectionCropPlan(
@@ -1843,92 +2149,27 @@ async function cropAndSaveSign(det, cropCenterOverride = null) {
       panoId,
       cropCenterOverride,
     );
-    const {
-      session,
-      metadata,
-      imageWidth,
-      imageHeight,
-      panoHeading,
-      tilt,
-      cropHeading,
-      cropPitch,
-      uncorrected,
-      corrected,
-      signSize,
-      detectionRelH,
-      cropRelH,
-      tiles,
-      tileX1,
-      tileY1,
-      cropBounds,
-      requestBody,
-    } = cropPlan;
-
-    // Current panorama viewer state
-    const pov = detectionPanorama.getPov();
-    const viewerFov = zoomToFov(pov.zoom || 1);
-
-    // A/B test: fetch both tiles and static crops in parallel
-    const [tilesResp, staticResult] = await Promise.allSettled([
-      fetch(`${apiUrl}/crop-sign-tiles`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...requestBody,
-          debug: true,
-          save: true,
-          include_image: true,
-        }),
+    const resp = await fetch(`${apiUrl}/crop-sign-tiles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...cropPlan.requestBody,
+        debug: true,
+        save: true,
+        include_image: true,
       }),
-      fetchCropStatic(det, panoId, { save: true }),
-    ]);
+    });
 
-    let tilesResult = null;
-    let tilesErr = null;
-    if (tilesResp.status === "fulfilled" && tilesResp.value.ok) {
-      const tilesJson = await tilesResp.value.json();
-      if (tilesJson.image_base64) {
-        tilesResult = {
-          src: `data:image/jpeg;base64,${tilesJson.image_base64}`,
-          width: tilesJson.width,
-          height: tilesJson.height,
-        };
-      } else if (tilesJson.filename) {
-        tilesResult = {
-          src: `${apiUrl}/detected-signs/${encodeURIComponent(tilesJson.filename)}`,
-          width: tilesJson.width,
-          height: tilesJson.height,
-        };
-      }
-    }
-    if (!tilesResult) {
-      tilesErr =
-        tilesResp.status === "rejected"
-          ? tilesResp.reason
-          : tilesResp.status === "fulfilled" && !tilesResp.value.ok
-            ? new Error(`Tiles: ${tilesResp.value.status}`)
-            : new Error("Tiles: no image data");
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new Error(`Tile crop failed: ${resp.status} - ${errText}`);
     }
 
-    const staticErr =
-      staticResult.status === "rejected" ? staticResult.reason : null;
-    const staticData =
-      staticResult.status === "fulfilled" ? staticResult.value : null;
-
-    showCropAbModal(
-      tilesErr || tilesResult,
-      staticErr || staticData,
-      statusEl,
-    );
-
+    const result = await resp.json();
     if (statusEl) {
-      const tilesStr = tilesResult
-        ? `${tilesResult.width}×${tilesResult.height}`
-        : "failed";
-      const staticStr = staticData
-        ? `${staticData.width}×${staticData.height}`
-        : "failed";
-      statusEl.textContent = `A/B: Tiles ${tilesStr} | Static ${staticStr}`;
+      statusEl.textContent = result.width && result.height
+        ? `Saved tile crop ${result.width}x${result.height}`
+        : "Saved tile crop";
     }
   } catch (err) {
     console.error("Save error:", err);
@@ -1944,6 +2185,16 @@ async function buildDetectionCropPlan(det, panoId, cropCenterOverride = null) {
   const imageHeight = TILE_GRID_HEIGHT;
   const panoHeading = metadata.heading || 0;
   const tilt = metadata.tilt ?? 90;
+  const hasTileBox =
+    Number.isFinite(det.tileX1) &&
+    Number.isFinite(det.tileY1) &&
+    Number.isFinite(det.tileX2) &&
+    Number.isFinite(det.tileY2);
+
+  const tileCenterX = hasTileBox ? (det.tileX1 + det.tileX2) / 2 : null;
+  const tileCenterY = hasTileBox ? (det.tileY1 + det.tileY2) / 2 : null;
+  const tileWidth = hasTileBox ? Math.abs(det.tileX2 - det.tileX1) : null;
+  const tileHeight = hasTileBox ? Math.abs(det.tileY2 - det.tileY1) : null;
 
   const cropHeading = cropCenterOverride?.heading ?? det.heading;
   const pitchBias =
@@ -1951,39 +2202,38 @@ async function buildDetectionCropPlan(det, panoId, cropCenterOverride = null) {
       ? CROP_PITCH_BIAS_DOWN * det.angularHeight
       : 0;
   const cropPitch = (cropCenterOverride?.pitch ?? det.pitch) - pitchBias;
-  const uncorrected = headingPitchToPixel(
-    cropHeading,
-    cropPitch,
-    imageWidth,
-    imageHeight,
-    panoHeading,
-  );
-  const corrected = headingPitchToPixelCorrected(
-    cropHeading,
-    cropPitch,
-    imageWidth,
-    imageHeight,
-    panoHeading,
-    tilt,
-  );
-  const signSize = angularToPixelSize(
-    det.angularWidth,
-    det.angularHeight,
-    imageWidth,
-    imageHeight,
-  );
 
-  let detectionRelH = det.heading - panoHeading;
-  if (detectionRelH < -180) detectionRelH += 360;
-  if (detectionRelH > 180) detectionRelH -= 360;
+  const cropCenter = cropCenterOverride
+    ? headingPitchToPixel(
+        cropHeading,
+        cropPitch,
+        imageWidth,
+        imageHeight,
+        panoHeading,
+      )
+    : hasTileBox
+      ? { x: tileCenterX, y: tileCenterY }
+      : headingPitchToPixel(
+          cropHeading,
+          cropPitch,
+          imageWidth,
+          imageHeight,
+          panoHeading,
+        );
 
-  let cropRelH = cropHeading - panoHeading;
-  if (cropRelH < -180) cropRelH += 360;
-  if (cropRelH > 180) cropRelH -= 360;
+  const signSize =
+    hasTileBox && Number.isFinite(tileWidth) && Number.isFinite(tileHeight)
+      ? { width: tileWidth, height: tileHeight }
+      : angularToPixelSize(
+          det.angularWidth,
+          det.angularHeight,
+          imageWidth,
+          imageHeight,
+        );
 
   const { tiles, tileX1, tileY1, cropBounds } = getTilesForRegion(
-    corrected.x,
-    corrected.y,
+    cropCenter.x,
+    cropCenter.y,
     signSize.width,
     signSize.height,
     CROP_PADDING_X,
@@ -1995,10 +2245,9 @@ async function buildDetectionCropPlan(det, panoId, cropCenterOverride = null) {
     meta: { panoHeading, tilt, metaImgW: metadata.imageWidth, metaImgH: metadata.imageHeight },
     gridSize: { w: imageWidth, h: imageHeight },
     cropCenter: { heading: cropHeading, pitch: cropPitch },
-    uncorrected: { x: uncorrected.x?.toFixed(1), y: uncorrected.y?.toFixed(1) },
-    corrected: { x: corrected.x?.toFixed(1), y: corrected.y?.toFixed(1), yCorr: corrected.yCorrection?.toFixed(1) },
+    tileBox: hasTileBox ? { x1: det.tileX1, y1: det.tileY1, x2: det.tileX2, y2: det.tileY2 } : null,
+    cropCenterPx: { x: cropCenter.x?.toFixed(1), y: cropCenter.y?.toFixed(1) },
     signPx: { w: signSize.width?.toFixed(1), h: signSize.height?.toFixed(1) },
-    relH: { det: detectionRelH?.toFixed(1), crop: cropRelH?.toFixed(1) },
     tiles: { x1: tileX1, y1: tileY1, count: tiles.length },
     cropBounds,
   }));
@@ -2012,11 +2261,11 @@ async function buildDetectionCropPlan(det, panoId, cropCenterOverride = null) {
     tilt,
     cropHeading,
     cropPitch,
-    uncorrected,
-    corrected,
+    uncorrected: cropCenter,
+    corrected: cropCenter,
     signSize,
-    detectionRelH,
-    cropRelH,
+    detectionRelH: null,
+    cropRelH: null,
     tiles,
     tileX1,
     tileY1,
@@ -2104,90 +2353,6 @@ async function fetchDetectionCropPreview(det, panoId) {
   }
 
   throw new Error("Preview response missing image data");
-}
-
-/**
- * Fetch sign crop using Static API at max resolution (640x640).
- * No coordinate conversion - image is centered on sign, alignment matches bbox.
- * @param {Object} options - { save: boolean } to also save to detected_signs/
- */
-async function fetchCropStatic(det, panoId, options = {}) {
-  const apiUrl = window.DETECTION_CONFIG?.API_URL;
-  const apiKey = window.GOOGLE_CONFIG?.API_KEY;
-  if (!apiUrl || !apiKey) {
-    throw new Error("Detection API or Google API key not configured");
-  }
-  const resp = await fetch(`${apiUrl}/crop-sign-static`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      pano_id: panoId,
-      heading: det.heading,
-      pitch: det.pitch,
-      angular_width: det.angularWidth ?? 0.5,
-      angular_height: det.angularHeight ?? 1,
-      confidence: det.confidence ?? 0,
-      api_key: apiKey,
-      padding: 1.5,
-      save: options.save ?? true,
-      include_image: true,
-    }),
-  });
-  if (!resp.ok) {
-    const errText = await resp.text();
-    throw new Error(`Static crop failed: ${errText}`);
-  }
-  const result = await resp.json();
-  if (result.image_base64) {
-    return {
-      src: `data:image/jpeg;base64,${result.image_base64}`,
-      width: result.width,
-      height: result.height,
-    };
-  }
-  throw new Error("Static crop response missing image data");
-}
-
-/**
- * Show A/B comparison modal with tiles vs static crop.
- */
-function showCropAbModal(tilesResult, staticResult, statusEl) {
-  const modal = document.getElementById("cropAbModal");
-  const tilesImg = document.getElementById("cropAbTilesImg");
-  const tilesMeta = document.getElementById("cropAbTilesMeta");
-  const staticImg = document.getElementById("cropAbStaticImg");
-  const staticMeta = document.getElementById("cropAbStaticMeta");
-  const closeBtn = document.getElementById("cropAbClose");
-  if (!modal || !tilesImg || !staticImg) return;
-
-  const renderCell = (container, metaEl, result, isError) => {
-    container.innerHTML = "";
-    if (isError) {
-      container.innerHTML = `<div class="crop-ab-error">${result}</div>`;
-      if (metaEl) metaEl.textContent = "";
-    } else {
-      const img = document.createElement("img");
-      img.src = result.src;
-      img.alt = "Crop";
-      container.appendChild(img);
-      if (metaEl) metaEl.textContent = `${result.width}×${result.height}px`;
-    }
-  };
-
-  renderCell(tilesImg, tilesMeta, tilesResult, tilesResult instanceof Error);
-  renderCell(staticImg, staticMeta, staticResult, staticResult instanceof Error);
-
-  modal.classList.add("visible");
-
-  const close = () => {
-    modal.classList.remove("visible");
-    if (statusEl) statusEl.textContent = "Tap to detect";
-  };
-
-  closeBtn.onclick = close;
-  modal.onclick = (e) => {
-    if (e.target === modal) close();
-  };
 }
 
 // Google Street View camera height in meters (roof-mounted camera)
@@ -3909,5 +4074,6 @@ function cleanupDetectionPanorama() {
   if (document.getElementById("detectionOverlay")) {
     document.getElementById("detectionOverlay").innerHTML = "";
   }
+  detectionPanorama?.destroy?.();
+  detectionPanorama = null;
 }
-
