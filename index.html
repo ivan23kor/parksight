@@ -256,90 +256,6 @@
         line-height: 1.4;
       }
 
-      #cropAbModal {
-        display: none;
-        position: fixed;
-        inset: 0;
-        z-index: 3000;
-        background: rgba(0, 0, 0, 0.7);
-        align-items: center;
-        justify-content: center;
-        padding: 20px;
-      }
-
-      #cropAbModal.visible {
-        display: flex;
-      }
-
-      #cropAbModal .crop-ab-content {
-        background: #fff;
-        border-radius: 12px;
-        padding: 24px;
-        max-width: 90vw;
-        max-height: 90vh;
-        overflow: auto;
-        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
-      }
-
-      #cropAbModal .crop-ab-title {
-        font-size: 18px;
-        font-weight: 600;
-        margin-bottom: 16px;
-        color: #111;
-      }
-
-      #cropAbModal .crop-ab-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 24px;
-        margin-bottom: 16px;
-      }
-
-      #cropAbModal .crop-ab-cell {
-        text-align: center;
-      }
-
-      #cropAbModal .crop-ab-cell h4 {
-        font-size: 14px;
-        font-weight: 600;
-        margin: 0 0 8px 0;
-        color: #333;
-      }
-
-      #cropAbModal .crop-ab-cell img {
-        max-width: 100%;
-        height: auto;
-        border-radius: 8px;
-        border: 1px solid #e5e7eb;
-      }
-
-      #cropAbModal .crop-ab-cell .crop-ab-meta {
-        font-size: 12px;
-        color: #6b7280;
-        margin-top: 6px;
-      }
-
-      #cropAbModal .crop-ab-cell .crop-ab-error {
-        color: #dc2626;
-        font-size: 13px;
-      }
-
-      #cropAbModal .crop-ab-close {
-        display: block;
-        margin: 0 auto;
-        padding: 10px 24px;
-        background: #3b82f6;
-        color: white;
-        border: none;
-        border-radius: 8px;
-        cursor: pointer;
-        font-size: 14px;
-      }
-
-      #cropAbModal .crop-ab-close:hover {
-        background: #2563eb;
-      }
-
       @media (max-width: 900px) {
         #splitLayout {
           flex-direction: column;
@@ -383,25 +299,6 @@
 
     <pre id="parksight-dump" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;margin:0;padding:20px;background:rgba(0,0,0,0.95);color:#4ade80;font-size:12px;overflow:auto;white-space:pre-wrap;word-break:break-all;cursor:pointer" onclick="this.style.display='none'"></pre>
 
-    <div id="cropAbModal" aria-label="Crop A/B comparison">
-      <div class="crop-ab-content">
-        <div class="crop-ab-title">Crop comparison: Tiles vs Static API</div>
-        <div class="crop-ab-grid">
-          <div class="crop-ab-cell" id="cropAbTiles">
-            <h4>Tiles (current)</h4>
-            <div id="cropAbTilesImg"></div>
-            <div class="crop-ab-meta" id="cropAbTilesMeta"></div>
-          </div>
-          <div class="crop-ab-cell" id="cropAbStatic">
-            <h4>Static API (new)</h4>
-            <div id="cropAbStaticImg"></div>
-            <div class="crop-ab-meta" id="cropAbStaticMeta"></div>
-          </div>
-        </div>
-        <button type="button" class="crop-ab-close" id="cropAbClose">Close</button>
-      </div>
-    </div>
-
     <!-- External Libraries -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
@@ -413,6 +310,7 @@
     <script src="js/streets.js"></script>
     <script src="js/panorama.js"></script>
     <script src="js/streetview.js"></script>
+    <script src="js/tile-viewer.js"></script>
     <script src="js/signRegistry.js"></script>
     <script src="js/detection.js"></script>
 
@@ -1900,8 +1798,8 @@
           if (
             !Number.isFinite(det?.heading) ||
             !Number.isFinite(det?.pitch) ||
-            !Number.isFinite(det?.angular_width) ||
-            !Number.isFinite(det?.angular_height)
+            !Number.isFinite(det?.angularWidth) ||
+            !Number.isFinite(det?.angularHeight)
           ) {
             continue;
           }
@@ -1911,9 +1809,9 @@
           );
           const pitchDelta = Math.abs(det.pitch - targetDetection.pitch);
           const widthRatio =
-            det.angular_width / Math.max(targetDetection.angularWidth, 0.05);
+            det.angularWidth / Math.max(targetDetection.angularWidth, 0.05);
           const heightRatio =
-            det.angular_height / Math.max(targetDetection.angularHeight, 0.05);
+            det.angularHeight / Math.max(targetDetection.angularHeight, 0.05);
           const sizePenalty =
             Math.abs(Math.log(Math.max(widthRatio, 0.05))) +
             Math.abs(Math.log(Math.max(heightRatio, 0.05)));
@@ -1971,10 +1869,14 @@
             detection: {
               heading: refinedMatch.heading,
               pitch: refinedMatch.pitch,
-              angularWidth: refinedMatch.angular_width,
-              angularHeight: refinedMatch.angular_height,
+              angularWidth: refinedMatch.angularWidth,
+              angularHeight: refinedMatch.angularHeight,
               confidence: refinedMatch.confidence,
               class_name: refinedMatch.class_name || "parking_sign",
+              tileX1: refinedMatch.tileX1,
+              tileY1: refinedMatch.tileY1,
+              tileX2: refinedMatch.tileX2,
+              tileY2: refinedMatch.tileY2,
             },
           };
 
