@@ -1,6 +1,7 @@
 const { test, expect } = require("@playwright/test");
 const fs = require("fs");
 const path = require("path");
+const { mockInfrastructure, PREVIEW_IMAGE_BASE64 } = require("./helpers/mock-infrastructure");
 
 /**
  * Detection E2E tests using REAL OSM data from the Vassar Street / MIT area.
@@ -32,204 +33,7 @@ const VASSAR_SEG_END = VASSAR_WAY.geometry[6];
 // Real Albany Street way/442971020 — has 2 cross-street intersections
 const ALBANY_WAY = fixtureWays.find((w) => w.id === 442971020);
 
-const PREVIEW_IMAGE_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0ioAAAAASUVORK5CYII=";
-
-// ─── Infrastructure stubs (not data) ───────────────────────────────────
-
-const LEAFLET_STUB = `
-(() => {
-  class LayerGroup {
-    constructor() { this._layers = []; }
-    addTo() { return this; }
-    clearLayers() { this._layers = []; return this; }
-    addLayer(layer) { this._layers.push(layer); return this; }
-    eachLayer(fn) { this._layers.forEach(fn); return this; }
-  }
-  function makeLayer(latlng, options = {}) {
-    return {
-      _latlng: latlng, options,
-      addTo(group) { if (group && typeof group.addLayer === "function") group.addLayer(this); return this; },
-      bindPopup() { return this; }, bindTooltip() { return this; }, on() { return this; }, openPopup() { return this; }, getPopup() { return null; },
-      setLatLng(next) { this._latlng = next; return this; },
-      setBounds(bounds) { this._bounds = bounds; return this; },
-    };
-  }
-  const mapHandlers = {};
-  const map = {
-    _zoom: 16, _center: { lat: 42.3615, lng: -71.0921 },
-    setView(center, zoom) { this._center = { lat: center[0], lng: center[1] }; this._zoom = zoom; return this; },
-    getBounds() {
-      const n = this._center.lat + 0.01, s = this._center.lat - 0.01;
-      const e = this._center.lng + 0.01, w = this._center.lng - 0.01;
-      return {
-        getNorth: () => n, getSouth: () => s,
-        getEast: () => e, getWest: () => w,
-        contains(latlng) {
-          const lat = Array.isArray(latlng) ? latlng[0] : latlng.lat;
-          const lng = Array.isArray(latlng) ? latlng[1] : latlng.lng;
-          return lat >= s && lat <= n && lng >= w && lng <= e;
-        },
-      };
-    },
-    getZoom() { return this._zoom; }, getCenter() { return this._center; },
-    invalidateSize() {}, fitBounds(b) { this._fitBounds = b; },
-    on(event, handler) { mapHandlers[event] = handler; return this; },
-    getContainer() { return document.getElementById("map"); },
-    dragging: { enable() {}, disable() {} }, doubleClickZoom: { enable() {}, disable() {} },
-  };
-  window.L = {
-    map() { return map; },
-    tileLayer() { return { addTo() { return this; } }; },
-    layerGroup() { return new LayerGroup(); },
-    circle(latlng, options) { return makeLayer(latlng, options); },
-    circleMarker(latlng, options) { return makeLayer(latlng, options); },
-    polyline(latlngs, options) { const l = makeLayer(latlngs[0], options); l._latlngs = latlngs; return l; },
-    rectangle(bounds, options) { const l = makeLayer(bounds[0], options); l.setBounds = function(n) { this._bounds = n; return this; }; return l; },
-    latLngBounds(points) { return points; },
-  };
-})();
-`;
-
-const GOOGLE_MAPS_STUB = `
-(() => {
-  const pos = window.__TEST_PANORAMA_POSITION || { lat: 42.3615, lng: -71.0921 };
-  class StreetViewService {
-    async getPanorama(request) {
-      return {
-        data: {
-          location: {
-            pano: request?.pano || "mock-pano",
-            latLng: { lat: () => pos.lat, lng: () => pos.lng },
-            description: "Mock panorama",
-          },
-          links: [
-            { pano: "linked-pano", heading: 90, description: "Linked panorama" },
-          ],
-        },
-      };
-    }
-  }
-  window.google = {
-    maps: {
-      StreetViewService,
-      StreetViewPreference: { NEAREST: "NEAREST" },
-      StreetViewSource: { OUTDOOR: "OUTDOOR" },
-    },
-  };
-  setTimeout(() => { if (typeof window.initApp === "function") window.initApp(); }, 0);
-})();
-`;
-
-const TURF_STUB = `
-window.turf = {
-  point(coords) { return { coords }; },
-  bearing(start, end) {
-    const avgLat = (start.coords[1] + end.coords[1]) / 2;
-    const dx = (end.coords[0] - start.coords[0]) * 111320 * Math.cos((avgLat * Math.PI) / 180);
-    const dy = (end.coords[1] - start.coords[1]) * 111320;
-    return (Math.atan2(dx, dy) * 180) / Math.PI;
-  },
-  distance(start, end) {
-    const avgLat = (start.coords[1] + end.coords[1]) / 2;
-    const dx = (end.coords[0] - start.coords[0]) * 111320 * Math.cos((avgLat * Math.PI) / 180);
-    const dy = (end.coords[1] - start.coords[1]) * 111320;
-    return Math.sqrt(dx * dx + dy * dy);
-  },
-  lineString(coordinates) { return { geometry: { type: "LineString", coordinates } }; },
-  bboxClip(line) { return line; },
-  lineIntersect(line1, line2) {
-    const coords1 = line1.geometry.coordinates;
-    const coords2 = line2.geometry.coordinates;
-    const features = [];
-    for (let i = 0; i < coords1.length - 1; i++) {
-      for (let j = 0; j < coords2.length - 1; j++) {
-        const [px, py] = coords1[i], [qx, qy] = coords1[i + 1];
-        const [rx, ry] = coords2[j], [sx, sy] = coords2[j + 1];
-        const dx1 = qx - px, dy1 = qy - py;
-        const dx2 = sx - rx, dy2 = sy - ry;
-        const denom = dx1 * dy2 - dy1 * dx2;
-        if (Math.abs(denom) < 1e-12) continue;
-        const t = ((rx - px) * dy2 - (ry - py) * dx2) / denom;
-        const u = ((rx - px) * dy1 - (ry - py) * dx1) / denom;
-        if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
-          features.push({ type: "Feature", geometry: { type: "Point", coordinates: [px + t * dx1, py + t * dy1] } });
-        }
-      }
-    }
-    return { type: "FeatureCollection", features };
-  },
-};
-`;
-
-function forwardBrowserConsole(page) {
-  page.on("console", (msg) => {
-    const type = msg.type();
-    const prefix = `[browser:${type}]`;
-    const text = msg.text();
-    if (type === "error") {
-      process.stderr.write(`${prefix} ${text}\n`);
-    } else {
-      process.stdout.write(`${prefix} ${text}\n`);
-    }
-  });
-  page.on("pageerror", (err) => {
-    process.stderr.write(`[browser:CRASH] ${err.message}\n${err.stack || ""}\n`);
-  });
-  page.on("requestfailed", (req) => {
-    process.stderr.write(`[browser:NET_FAIL] ${req.method()} ${req.url()} — ${req.failure()?.errorText || "unknown"}\n`);
-  });
-}
-
-async function mockInfrastructure(page, options = {}) {
-  forwardBrowserConsole(page);
-  const detectPanoramaResponse = options.detectPanoramaResponse ?? (() => ({
-    status: 404, body: JSON.stringify({ detail: "Not Found" }),
-  }));
-  const detectResponse = options.detectResponse ?? (() => ({
-    detections: [
-      { x1: 60, y1: 150, x2: 100, y2: 320, confidence: 0.91, class_name: "parking_sign" },
-      { x1: 420, y1: 140, x2: 458, y2: 300, confidence: 0.84, class_name: "parking_sign" },
-    ],
-    inference_time_ms: 42, image_width: 640, image_height: 360,
-  }));
-
-  await page.route("https://unpkg.com/leaflet@1.9.4/dist/leaflet.css", (r) => r.fulfill({ status: 200, contentType: "text/css", body: "" }));
-  await page.route("https://unpkg.com/leaflet@1.9.4/dist/leaflet.js", (r) => r.fulfill({ status: 200, contentType: "application/javascript", body: LEAFLET_STUB }));
-  await page.route("https://unpkg.com/@turf/turf@6.5.0/turf.min.js", (r) => r.fulfill({ status: 200, contentType: "application/javascript", body: TURF_STUB }));
-  await page.route("https://maps.googleapis.com/maps/api/js?**", (r) => r.fulfill({ status: 200, contentType: "application/javascript", body: GOOGLE_MAPS_STUB }));
-  await page.route("https://tile.googleapis.com/v1/createSession?**", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ session: "mock-session" }) }));
-  await page.route("https://tile.googleapis.com/v1/streetview/panoIds?**", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ panoIds: ["mock-pano"] }) }));
-  await page.route("https://tile.googleapis.com/v1/streetview/metadata?**", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ heading: 45, tilt: 90, roll: 0, imageWidth: 16384, imageHeight: 8192 }) }));
-  await page.route("https://tile.googleapis.com/v1/streetview/tiles/5/**", async (r) => {
-    await r.fulfill({
-      status: 200,
-      contentType: "image/png",
-      body: Buffer.from(PREVIEW_IMAGE_BASE64, "base64"),
-    });
-  });
-  await page.route("https://overpass-api.de/api/interpreter", (r) => r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ elements: fixtureWays }) }));
-
-  await page.route("http://127.0.0.1:8000/detect-tiles", async (r) => {
-    const resp = typeof detectPanoramaResponse === "function" ? detectPanoramaResponse(r.request()) : detectPanoramaResponse;
-    await r.fulfill({ status: resp.status, contentType: resp.contentType || "application/json", body: resp.body });
-  });
-  await page.route("http://127.0.0.1:8000/detect", async (r) => {
-    const resp = typeof detectResponse === "function" ? detectResponse(r.request()) : detectResponse;
-    await r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(resp) });
-  });
-  await page.route("http://127.0.0.1:8000/crop-sign-tiles", async (r) => {
-    await r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ width: 200, height: 300, image_base64: PREVIEW_IMAGE_BASE64 }) });
-  });
-  await page.route("http://127.0.0.1:8000/ocr-sign", async (r) => {
-    await r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
-      is_parking_sign: true, confidence_readable: "high",
-      rules: [{ category: "no_parking", arrow_direction: "left", days: ["mon","tue","wed","thu","fri"], time_start: "08:00", time_end: "18:00" }],
-      tow_zones: [], raw_text: "NO PARKING 8AM-6PM MON-FRI",
-    }) });
-  });
-}
-
+// ─── Test-specific data and helpers ─────────────────────────────────────
 function perpendicularDistanceMeters(point, segment) {
   const originLat = (segment.start.lat + segment.end.lat) / 2;
   const originLng = (segment.start.lng + segment.end.lng) / 2;
@@ -281,7 +85,7 @@ const ANGULAR_DETECTIONS_RESPONSE = {
 
 test.describe("detection flow (real OSM data)", () => {
   test("merged detections use representative primitive box height for stacked clusters", async ({ page }) => {
-    await mockInfrastructure(page);
+    await mockInfrastructure(page, { fixtureWays });
     await page.goto("/?api_key=test-key");
 
     const metrics = await page.evaluate(() => {
@@ -303,7 +107,7 @@ test.describe("detection flow (real OSM data)", () => {
   });
 
   test("snaps sign projections to fixed offset from real Vassar Street polyline", async ({ page }) => {
-    await mockInfrastructure(page);
+    await mockInfrastructure(page, { fixtureWays });
     await page.goto("/?api_key=test-key");
 
     const vassar = VASSAR_WAY;
@@ -330,7 +134,7 @@ test.describe("detection flow (real OSM data)", () => {
   });
 
   test("builds preview crops with 25% extra vertical margin", async ({ page }) => {
-    await mockInfrastructure(page);
+    await mockInfrastructure(page, { fixtureWays });
     await page.goto("/?api_key=test-key");
 
     const cropPlan = await page.evaluate(async () => {
@@ -345,7 +149,7 @@ test.describe("detection flow (real OSM data)", () => {
   });
 
   test("popup preview stays stable across reopen after refinement", async ({ page }) => {
-    await mockInfrastructure(page);
+    await mockInfrastructure(page, { fixtureWays });
     await page.goto("/?api_key=test-key");
 
     const primarySrc = "data:image/jpeg;base64,PRIMARY_PREVIEW";
@@ -381,7 +185,7 @@ test.describe("detection flow (real OSM data)", () => {
   });
 
   test("falls back to single-view detection on real Vassar Street", async ({ page }) => {
-    await mockInfrastructure(page, { detectPanoramaResponse: ANGULAR_DETECTIONS_RESPONSE });
+    await mockInfrastructure(page, { fixtureWays, detectPanoramaResponse: ANGULAR_DETECTIONS_RESPONSE });
     await page.addInitScript(() => { window.__TEST_PANORAMA_POSITION = { lat: 42.3614859, lng: -71.0921589 }; });
     await page.goto("/?api_key=test-key");
 
@@ -405,7 +209,7 @@ test.describe("detection flow (real OSM data)", () => {
   });
 
   test("renders dashed road marker on real Vassar Street geometry", async ({ page }) => {
-    await mockInfrastructure(page, { detectPanoramaResponse: ANGULAR_DETECTIONS_RESPONSE });
+    await mockInfrastructure(page, { fixtureWays, detectPanoramaResponse: ANGULAR_DETECTIONS_RESPONSE });
     await page.addInitScript(() => { window.__TEST_PANORAMA_POSITION = { lat: 42.3614859, lng: -71.0921589 }; });
     await page.goto("/?api_key=test-key");
 
@@ -436,7 +240,7 @@ test.describe("detection flow (real OSM data)", () => {
   });
 
   test("resolves real Vassar Street geometry for 2D road marker", async ({ page }) => {
-    await mockInfrastructure(page, { detectPanoramaResponse: ANGULAR_DETECTIONS_RESPONSE });
+    await mockInfrastructure(page, { fixtureWays, detectPanoramaResponse: ANGULAR_DETECTIONS_RESPONSE });
     await page.addInitScript(() => { window.__TEST_PANORAMA_POSITION = { lat: 42.3614859, lng: -71.0921589 }; });
     await page.goto("/?api_key=test-key");
 
@@ -464,7 +268,7 @@ test.describe("detection flow (real OSM data)", () => {
   });
 
   test("limits rule curves to real Albany Street intersections (Portland St, Main St)", async ({ page }) => {
-    await mockInfrastructure(page);
+    await mockInfrastructure(page, { fixtureWays });
     await page.goto("/?api_key=test-key");
 
     const result = await page.evaluate(async ({ albanyGeo, allWays }) => {
@@ -525,6 +329,7 @@ test.describe("detection flow (real OSM data)", () => {
 
   test("projects signs at fixed offset from real Vassar Street polyline", async ({ page }) => {
     await mockInfrastructure(page, {
+      fixtureWays,
       detectPanoramaResponse: {
         status: 200,
         body: ANGULAR_DETECTIONS_RESPONSE.body,

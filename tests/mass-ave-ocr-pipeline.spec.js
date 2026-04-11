@@ -2,6 +2,12 @@ const { test } = require('@playwright/test');
 const path = require('path');
 const fs = require('fs');
 
+
+// Requires real Google Street View API + backend. Run with RUN_LIVE_OCR_TESTS=1
+test.describe(!process.env.RUN_LIVE_OCR_TESTS ? 'live OCR pipeline (skipped)' : 'live OCR pipeline', () => {
+  if (!process.env.RUN_LIVE_OCR_TESTS) test.skip();
+
+
 const OUTPUT_DIR = '/home/ivan23kor/Code/parksight/evals/runs/mass-ave-ocr-pipeline';
 const APP_URL = 'http://127.0.0.1:8080';
 
@@ -241,4 +247,5 @@ test('full OCR pipeline inspection', async ({ page }) => {
   report.screenshots.push('08-final-state.png');
   report.steps_completed = 8;
   writeReport();
+});
 });
