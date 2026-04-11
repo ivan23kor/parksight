@@ -29,6 +29,12 @@ function writeReport() {
 }
 
 async function clickMapAt(page, lat, lng) {
+  // Close any open popups so they don't intercept the click
+  await page.evaluate(() => {
+    // eslint-disable-next-line no-undef
+    map.closePopup();
+  });
+
   const point = await page.evaluate(({ lat, lng }) => {
     // `map` is a `let` in the page's script scope, accessible here
     // eslint-disable-next-line no-undef
@@ -46,8 +52,9 @@ async function clickMapAt(page, lat, lng) {
 async function waitForPanoLoad(page) {
   await page.waitForFunction(() => {
     const status = document.querySelector('#detectionStatus')?.textContent || '';
-    return status.startsWith('Heading');
-  }, { timeout: 30000 });
+    // Pano is loaded when status is not empty and not a detection result
+    return status.length > 0 && !status.includes('Found') && !status.includes('OCR');
+  }, { timeout: 60000 });
 }
 
 async function runDetectionAndWaitForOcr(page) {
