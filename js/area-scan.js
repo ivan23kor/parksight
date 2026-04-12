@@ -20,6 +20,7 @@ const areaScanState = {
   allWays: null,
   workerBusy: false,
   processed: 0,
+  ocrDone: 0,
   cancelled: false,
   MAX_PANOS: 100,
 };
@@ -33,6 +34,16 @@ function _normalize(b) { return ((b % 360) + 360) % 360; }
 function _updateStatus(text) {
   const el = document.getElementById("scanAreaStatus");
   if (el) { el.textContent = text; el.style.display = text ? "block" : "none"; }
+}
+
+function _scanProgress() {
+  const s = areaScanState;
+  const total = s.discoveredPanos.size;
+  if (!total) return;
+  const allDone = s.processed >= total && !s.detectionQueue.length && !s.workerBusy;
+  const parts = [`Detect ${s.processed}/${total}`, `OCR ${s.ocrDone}/${total}`];
+  if (!allDone) parts.unshift(`Pano ${total}`);
+  _updateStatus((allDone ? 'Done · ' : '') + parts.join(' · '));
 }
 
 function _scanBtn() { return document.getElementById("scanAreaBtn"); }
@@ -323,7 +334,7 @@ function _emitPano(panoId, lat, lng) {
   state.discoveredPanos.set(panoId, { lat, lng, marker, status: "discovered" });
   state.detectionQueue.push(panoId);
 
-  _updateStatus(`Scanning: ${state.discoveredPanos.size}/${state.MAX_PANOS} panos`);
+  _scanProgress();
 
   // Kick detection worker
   _tickWorker();
@@ -340,6 +351,7 @@ async function startAreaScan(polygonFeature) {
   state.allWays = null;
   state.workerBusy = false;
   state.processed = 0;
+  state.ocrDone = 0;
   state.cancelled = false;
   state.polygonFeature = polygonFeature;
 
@@ -381,11 +393,11 @@ async function startAreaScan(polygonFeature) {
   }
 
   if (!state.cancelled) {
-    _updateStatus(
-      state.discoveredPanos.size > 0
-        ? `Scan complete: ${state.discoveredPanos.size} panos`
-        : "No panorama coverage found"
-    );
+    if (state.discoveredPanos.size > 0) {
+      _scanProgress();
+    } else {
+      _updateStatus("No panorama coverage found");
+    }
   }
 }
 
@@ -401,14 +413,12 @@ async function _tickWorker() {
       const panoId = state.detectionQueue.shift();
       await _processPano(panoId);
       state.processed++;
-      _updateStatus(
-        `Processing: ${state.processed}/${state.discoveredPanos.size} panos`
-      );
+      _scanProgress();
     }
   } finally {
     state.workerBusy = false;
     if (!state.cancelled && state.processed >= state.discoveredPanos.size && state.discoveredPanos.size > 0) {
-      _updateStatus(`Done: ${state.processed} panos processed`);
+      _scanProgress();
     }
   }
 }
@@ -429,6 +439,7 @@ async function _processPano(panoId) {
     const store = appendSignMapDetection(cached.entry);
     const allWays = state.allWays;
     await renderSignMapData(store, allWays, new Set(), false);
+    state.ocrDone++;
     return;
   }
 
@@ -473,6 +484,8 @@ async function _processPano(panoId) {
 
     if (clustered.length === 0) {
       _promoteMarker(panoId, "empty");
+      state.ocrDone++;
+      _scanProgress();
       return;
     }
 
@@ -521,9 +534,12 @@ async function _processPano(panoId) {
 
     // 11. OCR (fire-and-forget — uses ocr-complete event listener)
     if (typeof hydrateDetectionPreviews === "function") {
-      hydrateDetectionPreviews(signLocations, panoId).catch(err => {
-        console.warn("[area-scan] preview hydration failed:", err);
-      });
+      hydrateDetectionPreviews(signLocations, panoId)
+        .catch(err => { console.warn("[area-scan] preview hydration failed:", err); })
+        .finally(() => { state.ocrDone++; _scanProgress(); });
+    } else {
+      state.ocrDone++;
+      _scanProgress();
     }
 
     // 12. Cache
@@ -535,6 +551,7 @@ async function _processPano(panoId) {
   } catch (err) {
     console.error(`[area-scan] processPano ${panoId} failed:`, err);
     _promoteMarker(panoId, "error");
+    state.ocrDone++;
   }
 }
 
