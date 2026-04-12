@@ -349,9 +349,9 @@
       let latestRenderedSignMapData = null;
       const SIGN_MAP_STORAGE_KEY = "parksight_latest_sign_map_data";
       const SIGN_MAP_PROJECTION_VERSION = 6;
-      const INITIAL_LOCATION = { lat: 42.36157, lon: -71.09727 };
+      const INITIAL_LOCATION = { lat: 42.36237, lon: -71.09682 };
       const DEFAULT_SIDE = "right";
-      const BASE_HEADING = 347.1;
+      const BASE_HEADING = 182;
       const PREVIEW_ALT_MIN_DISTANCE_METERS = 2.5;
       const PREVIEW_ALT_MAX_DISTANCE_METERS = 80;
       const PREVIEW_ALT_IMPROVEMENT_RATIO = 0.92;
@@ -2074,7 +2074,7 @@
         }
 
         // Initialize Leaflet map
-        map = L.map("map", { maxZoom: 19, minZoom: 2 }).setView([42.36157, -71.09727], 19);
+        map = L.map("map", { maxZoom: 19, minZoom: 2 }).setView([42.36237, -71.09682], 19);
 
         // Add tile layer (OpenStreetMap with street names)
         L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -2324,7 +2324,7 @@
             side: DEFAULT_SIDE,
             streetBearing: BASE_HEADING,
             oneway: null,
-            streetName: "34 Vassar St",
+            streetName: "Massachusetts Ave",
           };
 
           initPanoramaForContext();
