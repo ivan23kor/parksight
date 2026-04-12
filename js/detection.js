@@ -2114,21 +2114,19 @@ function buildInterpretationHtml() { return ""; }
  * All detections in a panorama belong to one physical sign post,
  * so we merge them into one bounding box, crop once, and OCR once.
  */
-async function runOcrOnAllDetections() {
+/**
+ * Reusable OCR pipeline — no global deps on detectionPanorama.
+ * @param {string} panoId
+ * @param {number} camLat
+ * @param {number} camLng
+ * @param {Array} detections - clustered detection objects
+ * @returns {Promise<Array>} detections with ocrResult attached
+ */
+async function runOcrOnDetections(panoId, camLat, camLng, detections) {
   const apiUrl = window.DETECTION_CONFIG?.API_URL;
-  if (!apiUrl || !detectionPanorama || currentDetections.length === 0) return;
+  if (!apiUrl || !panoId || !detections?.length) return detections;
 
-  ocrResults.clear();
-
-  const panoId = detectionPanorama.getPano();
-  if (!panoId) return;
-
-  const statusEl = document.getElementById("status") || document.getElementById("detectionStatus");
-  if (statusEl) statusEl.textContent = `Running OCR on ${currentDetections.length} sign cluster(s)...`;
-
-  // Run OCR independently on each detection cluster (in parallel).
-  // Merging all clusters into one crop fails when they are on separate sign poles.
-  await Promise.allSettled(currentDetections.map(async (det, i) => {
+  await Promise.allSettled(detections.map(async (det, i) => {
     try {
       const cropPlan = await buildDetectionCropPlan(det, panoId, null);
 
@@ -2162,31 +2160,42 @@ async function runOcrOnAllDetections() {
       }
 
       const ocrResult = await ocrResp.json();
-      ocrResults.set(i, ocrResult);
       det.ocrResult = ocrResult;
 
-      // Hook up deduplication: Register sign and assign UUID
-      const pos = detectionPanorama?.getPosition?.();
-      const cameraLat = pos?.lat?.();
-      const cameraLng = pos?.lng?.();
-      if (cameraLat && cameraLng) {
-        det.uuid = window.signRegistry.registerSign(
-          det,
-          ocrResult,
-          cameraLat,
-          cameraLng
-        );
+      if (camLat && camLng && window.signRegistry) {
+        det.uuid = window.signRegistry.registerSign(det, ocrResult, camLat, camLng);
       } else {
         det.uuid = crypto.randomUUID();
       }
     } catch (err) {
       console.warn(`OCR error [${i}]:`, err);
-      const errorMsg = `OCR failed: ${err.message}`;
-      det.ocrResult = { is_parking_sign: false, rejection_reason: errorMsg };
-      det.ocrError = errorMsg;
-      ocrResults.set(i, det.ocrResult);
+      det.ocrResult = { is_parking_sign: false, rejection_reason: `OCR failed: ${err.message}` };
+      det.ocrError = `OCR failed: ${err.message}`;
     }
   }));
+
+  return detections;
+}
+
+async function runOcrOnAllDetections() {
+  const apiUrl = window.DETECTION_CONFIG?.API_URL;
+  if (!apiUrl || !detectionPanorama || currentDetections.length === 0) return;
+
+  ocrResults.clear();
+
+  const panoId = detectionPanorama.getPano();
+  if (!panoId) return;
+
+  const statusEl = document.getElementById("status") || document.getElementById("detectionStatus");
+  if (statusEl) statusEl.textContent = `Running OCR on ${currentDetections.length} sign cluster(s)...`;
+
+  const camLat = detectionPanorama?.getPosition?.()?.lat?.();
+  const camLng = detectionPanorama?.getPosition?.()?.lng?.();
+  await runOcrOnDetections(panoId, camLat, camLng, currentDetections);
+
+  for (let i = 0; i < currentDetections.length; i++) {
+    if (currentDetections[i].ocrResult) ocrResults.set(i, currentDetections[i].ocrResult);
+  }
 
   updateDetectionOverlay();
   window.dispatchEvent(new Event("ocr-complete"));

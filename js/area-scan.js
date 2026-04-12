@@ -511,7 +511,23 @@ async function _processPano(panoId) {
     };
     const signLocations = estimateAllSignLocations(camLat, camLng, roadCtx);
 
-    // 9. Build detection entry
+    // 9. Run OCR on clustered detections
+    await runOcrOnDetections(panoId, camLat, camLng, clustered);
+
+    // Match OCR results to projected sign locations by heading
+    for (const sign of signLocations) {
+      let best = null, minDelta = Infinity;
+      for (const det of clustered) {
+        if (!det.ocrResult) continue;
+        const d = Math.abs(signedAngleDeltaDegrees(det.heading, sign.heading));
+        if (d < minDelta) { minDelta = d; best = det; }
+      }
+      if (best && (!sign.ocrResult?.is_parking_sign || best.ocrResult.is_parking_sign)) {
+        sign.ocrResult = best.ocrResult;
+      }
+    }
+
+    // 10. Build detection entry
     const detectionEntry = {
       savedAt: Date.now(),
       source: "area-scan",
@@ -527,20 +543,12 @@ async function _processPano(panoId) {
       signs: signLocations,
     };
 
-    // 10. Persist and render
+    // 11. Persist and render (with OCR data — rule curves will draw)
     const newSignUuids = new Set(signLocations.filter(s => s.uuid).map(s => s.uuid));
     const store = appendSignMapDetection(detectionEntry);
     await renderSignMapData(store, allWays, newSignUuids, false);
-
-    // 11. OCR (fire-and-forget — uses ocr-complete event listener)
-    if (typeof hydrateDetectionPreviews === "function") {
-      hydrateDetectionPreviews(signLocations, panoId)
-        .catch(err => { console.warn("[area-scan] preview hydration failed:", err); })
-        .finally(() => { state.ocrDone++; _scanProgress(); });
-    } else {
-      state.ocrDone++;
-      _scanProgress();
-    }
+    state.ocrDone++;
+    _scanProgress();
 
     // 12. Cache
     scanCache.set(panoId, { lat: camLat, lng: camLng, entry: detectionEntry });
