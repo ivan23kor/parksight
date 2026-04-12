@@ -327,7 +327,7 @@ class TileViewer {
     await Promise.allSettled(visible.tiles.map((tile) => this._ensureTile(tile.x, tile.y)));
 
     for (const tile of visible.tiles) {
-      const key = `${tile.x},${tile.y}`;
+      const key = `${this._panoId},${tile.x},${tile.y}`;
       const img = this._tileCache.get(key);
       if (!img) continue;
 
@@ -343,7 +343,8 @@ class TileViewer {
   }
 
   async _ensureTile(tileX, tileY) {
-    const key = `${tileX},${tileY}`;
+    const panoId = this._panoId;
+    const key = `${panoId},${tileX},${tileY}`;
     if (this._tileCache.has(key)) {
       return this._tileCache.get(key);
     }
@@ -353,7 +354,7 @@ class TileViewer {
     const apiKey = window.GOOGLE_CONFIG?.API_KEY;
     const url =
       `https://tile.googleapis.com/v1/streetview/tiles/5/${safeX}/${safeY}` +
-      `?session=${this._session}&key=${apiKey}&panoId=${this._panoId}`;
+      `?session=${this._session}&key=${apiKey}&panoId=${panoId}`;
     const img = new Image();
     img.crossOrigin = "anonymous";
 
@@ -366,7 +367,8 @@ class TileViewer {
       return null;
     });
 
-    if (loaded) {
+    // Discard tile if pano changed while fetching
+    if (loaded && this._panoId === panoId) {
       this._tileCache.set(key, loaded);
     }
     return loaded;
