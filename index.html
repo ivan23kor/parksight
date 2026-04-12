@@ -1243,6 +1243,13 @@
             signCircle.on("popupopen", (event) => {
               const mapWidth = document.getElementById("mapPane")?.offsetWidth || 600;
               const w = Math.round(mapWidth * 0.8);
+              const el = event.popup.getElement();
+              if (el) {
+                const wrapper = el.querySelector('.leaflet-popup-content-wrapper');
+                const content = el.querySelector('.leaflet-popup-content');
+                if (wrapper) wrapper.style.width = w + 'px';
+                if (content) content.style.width = w + 'px';
+              }
               event.popup.options.maxWidth = w;
               event.popup.options.minWidth = w;
               event.popup.update();
