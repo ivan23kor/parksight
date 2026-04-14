@@ -1750,6 +1750,15 @@ async function runSinglePanoApiDetection(panoId, heading, pitch, fov, statusEl) 
     }
   }
 
+  console.log('[DETECT-TILES-REQ]', JSON.stringify({
+    panoId, heading, pitch, fov, panoHeading,
+    centerPx: { x: center.x?.toFixed(1), y: center.y?.toFixed(1) },
+    tileRange: { minX: minTileX, maxX: maxTileX, minY: minTileY, maxY: maxTileY },
+    tilesCount: tiles.length,
+    hasNegativeX: tiles.some(t => t.x < 0),
+    hasOverflowX: tiles.some(t => t.x >= 32),
+  }));
+
   let resp;
   try {
     resp = await fetch(`${apiUrl}/detect-tiles`, {
@@ -2161,6 +2170,10 @@ async function runOcrOnDetections(panoId, camLat, camLng, detections) {
 
       const ocrResult = await ocrResp.json();
       det.ocrResult = ocrResult;
+      console.log('[OCR-RESULT]', JSON.stringify({
+        panoId, detIndex: i, cropStatus: cropResp.status, ocrStatus: ocrResp.status,
+        isParkingSign: ocrResult?.is_parking_sign, ocrRules: ocrResult?.rules?.length ?? 0,
+      }));
 
       if (camLat && camLng && window.signRegistry) {
         det.uuid = window.signRegistry.registerSign(det, ocrResult, camLat, camLng);
@@ -2169,6 +2182,7 @@ async function runOcrOnDetections(panoId, camLat, camLng, detections) {
       }
     } catch (err) {
       console.warn(`OCR error [${i}]:`, err);
+      console.error('[OCR-ERROR]', JSON.stringify({ panoId, detIndex: i, error: err.message }));
       det.ocrResult = { is_parking_sign: false, rejection_reason: `OCR failed: ${err.message}` };
       det.ocrError = `OCR failed: ${err.message}`;
     }
@@ -2326,6 +2340,7 @@ async function buildDetectionCropPlan(det, panoId, cropCenterOverride = null) {
   );
 
   console.log('[CROP-DIAG]', JSON.stringify({
+    panoId,
     det: { heading: det.heading, pitch: det.pitch, angW: det.angularWidth, angH: det.angularHeight },
     meta: { panoHeading, tilt, metaImgW: metadata.imageWidth, metaImgH: metadata.imageHeight },
     gridSize: { w: imageWidth, h: imageHeight },
@@ -2335,6 +2350,7 @@ async function buildDetectionCropPlan(det, panoId, cropCenterOverride = null) {
     signPx: { w: signSize.width?.toFixed(1), h: signSize.height?.toFixed(1) },
     tiles: { x1: tileX1, y1: tileY1, count: tiles.length },
     cropBounds,
+    tilesHaveNegativeX: tiles.some(t => t.x < 0),
   }));
 
   return {

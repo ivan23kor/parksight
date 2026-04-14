@@ -62,6 +62,8 @@ _t0 = time.perf_counter()
 depth_model(_warmup_img)
 print(f"  Depth warmup: {time.perf_counter() - _t0:.2f}s")
 print("Warmup complete.")
+print(f"GEMINI_API_KEY set: {bool(os.environ.get('GEMINI_API_KEY'))}")
+print(f"GEMINI_OCR_MODEL: {os.environ.get('GEMINI_OCR_MODEL', 'gemini-3.1-flash-lite-preview')}")
 
 logger = logging.getLogger(__name__)
 
@@ -598,6 +600,8 @@ async def fetch_streetview_tile_image(
 ) -> Image.Image:
     safe_x = normalize_tile_x(tile_x)
     safe_y = clamp_tile_y(tile_y)
+    if tile_x != safe_x:
+        print(f"[tile-fetch] TILE X NORMALIZED: raw={tile_x} -> safe={safe_x} (pano={pano_id})")
     url = (
         f"https://tile.googleapis.com/v1/streetview/tiles/{TILE_ZOOM}/{safe_x}/{safe_y}"
         f"?session={session_token}&key={api_key}&panoId={pano_id}"
@@ -773,6 +777,7 @@ async def crop_sign_tiles(request: CropSignTilesRequest):
     Fetch Street View tiles at max zoom, stitch if needed, crop sign region.
     This gives much higher resolution than the Static API.
     """
+    print(f"[crop-sign-tiles] pano={request.pano_id} tiles={[(t['x'],t['y']) for t in request.tiles]} origin=({request.tile_x1},{request.tile_y1}) crop=({request.crop_x},{request.crop_y},{request.crop_width},{request.crop_height})")
     stitched, stitch_width, stitch_height, tile_api_requests = await stitch_requested_tiles(
         request.pano_id,
         request.tiles,
@@ -888,6 +893,7 @@ async def detect_tiles(request: DetectTilesRequest):
         raise HTTPException(status_code=400, detail=f"Failed to fetch pano metadata: {e}")
 
     pano_heading = float(metadata.get("heading") or 0.0)
+    print(f"[detect-tiles] pano={request.pano_id} metadata_heading={pano_heading} request_heading={request.request_heading}")
 
     t_start = time.time()
     print(
@@ -1606,44 +1612,60 @@ async def ocr_sign(request: OcrSignRequest):
     import base64 as _b64
     raw = _b64.b64decode(request.image_base64[:32])
     mime = "image/png" if raw[:4] == b'\x89PNG' else "image/jpeg"
+    print(f"[ocr-sign] MIME: first_bytes={raw[:8].hex()} detected={mime} b64_len={len(request.image_base64)}")
 
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
 
-    model = os.environ.get("GEMINI_OCR_MODEL", "gemini-3.1-flash-lite-preview")
+    primary_model = os.environ.get("GEMINI_OCR_MODEL", "gemini-3.1-flash-lite-preview")
+    fallback_model = "gemini-2.5-flash-lite"
 
     start_time = time.time()
 
     max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            resp = await httpx_client.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
-                headers={"Content-Type": "application/json"},
-                json={
-                    "contents": [{
-                        "parts": [
-                            {"inline_data": {"mime_type": mime, "data": request.image_base64}},
-                            {"text": OCR_PROMPT}
-                        ]
-                    }]
-                },
-                timeout=60.0
-            )
-            resp.raise_for_status()
+    models_to_try = [primary_model, fallback_model]
+    resp = None
+    for model in models_to_try:
+        for attempt in range(max_retries):
+            try:
+                resp = await httpx_client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "contents": [{
+                            "parts": [
+                                {"inline_data": {"mime_type": mime, "data": request.image_base64}},
+                                {"text": OCR_PROMPT}
+                            ]
+                        }]
+                    },
+                    timeout=60.0
+                )
+                resp.raise_for_status()
+                break
+            except httpx.HTTPStatusError as e:
+                retryable = e.response.status_code in (429, 503, 502)
+                if retryable and attempt < max_retries - 1:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                if model != models_to_try[-1]:
+                    print(f"[ocr-sign] model {model} failed ({e.response.status_code}), trying fallback {models_to_try[models_to_try.index(model)+1]}")
+                    break
+                print(f"[ocr-sign] Gemini error: status={e.response.status_code} body={e.response.text[:500]}")
+                raise HTTPException(status_code=502, detail=f"OCR API error: {e.response.status_code} {e.response.reason_phrase}")
+            except httpx.HTTPError as e:
+                if model != models_to_try[-1]:
+                    print(f"[ocr-sign] model {model} network error ({e}), trying fallback")
+                    break
+                raise HTTPException(status_code=502, detail=f"OCR API error: {e}")
+        if resp and resp.status_code == 200:
             break
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429 and attempt < max_retries - 1:
-                await asyncio.sleep(2 ** attempt)
-                continue
-            raise HTTPException(status_code=502, detail=f"OCR API error: {e.response.status_code} {e.response.reason_phrase}")
-        except httpx.HTTPError as e:
-            raise HTTPException(status_code=502, detail=f"OCR API error: {e}")
 
     inference_time_ms = (time.time() - start_time) * 1000
 
     data = resp.json()
+    print(f"[ocr-sign] Gemini response: status={resp.status_code} candidates={len(data.get('candidates', []))}")
 
     # Extract text from Gemini response format
     try:
@@ -1667,6 +1689,7 @@ async def ocr_sign(request: OcrSignRequest):
     except _json.JSONDecodeError as e:
         raise HTTPException(status_code=502, detail=f"Failed to parse OCR response: {e}")
 
+    print(f"[ocr-sign] result: is_parking_sign={parsed.get('is_parking_sign')} rules={len(parsed.get('rules', []))} time={round(inference_time_ms)}ms")
     return OcrSignResponse(
         is_parking_sign=parsed.get("is_parking_sign", False),
         confidence_readable=parsed.get("confidence_readable"),

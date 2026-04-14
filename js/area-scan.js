@@ -449,6 +449,11 @@ async function _processPano(panoId) {
     const meta = await fetchStreetViewMetadata(panoId, session);
     const camLat = meta?.lat ?? entry.lat;
     const camLng = meta?.lng ?? entry.lng;
+    console.log('[SCAN-TRACE] metadata', JSON.stringify({
+      panoId, bfsLat: entry.lat, bfsLng: entry.lng, metaLat: camLat, metaLng: camLng,
+      metaHeading: meta?.heading, metaTilt: meta?.tilt,
+      coordDriftMeters: (Math.sqrt((camLat - entry.lat)**2 + (camLng - entry.lng)**2) * 111320).toFixed(1),
+    }));
 
     // Snap marker to metadata coords (Tile API position is road-corrected)
     if (entry.marker && meta?.lat != null && meta?.lng != null) {
@@ -471,6 +476,7 @@ async function _processPano(panoId) {
       // Two-way: right curb forward + right curb reverse
       headings = [_normalize(b + 45), _normalize(b - 135)];
     }
+    console.log('[SCAN-TRACE] headings', JSON.stringify({ panoId, streetBearing: b, oneway, headings, streetName }));
 
     // 4. Run detection for each heading
     const allDetections = [];
@@ -483,9 +489,24 @@ async function _processPano(panoId) {
         allDetections.push(...result.value.detections);
       }
     }
+    console.log('[SCAN-TRACE] detections', JSON.stringify({
+      panoId, rawDetections: allDetections.length,
+      perHeading: detectionResults.map((r, i) => ({
+        heading: headings[i], status: r.status,
+        count: r.status === 'fulfilled' ? (r.value?.detections?.length ?? 0) : 0,
+        error: r.status === 'rejected' ? r.reason?.message : undefined,
+      })),
+    }));
 
     // 5. Cluster
     const clustered = clusterAngularDetections(allDetections);
+    console.log('[SCAN-TRACE] clusters', JSON.stringify({
+      panoId, rawCount: allDetections.length, clusteredCount: clustered.length,
+      clusters: clustered.map(c => ({
+        heading: c.heading?.toFixed(1), pitch: c.pitch?.toFixed(1),
+        conf: c.confidence?.toFixed(2), angW: c.angularWidth?.toFixed(2), angH: c.angularHeight?.toFixed(2),
+      })),
+    }));
 
     if (clustered.length === 0) {
       _promoteMarker(panoId, "empty");
@@ -518,6 +539,12 @@ async function _processPano(panoId) {
 
     // 9. Run OCR on clustered detections
     await runOcrOnDetections(panoId, camLat, camLng, clustered);
+    console.log('[SCAN-TRACE] ocr', JSON.stringify({
+      panoId, results: clustered.map((c, i) => ({
+        index: i, isParkingSign: c.ocrResult?.is_parking_sign,
+        ocrError: c.ocrError || null, rules: c.ocrResult?.rules?.length ?? 0,
+      })),
+    }));
 
     // Match OCR results to projected sign locations by heading
     for (const sign of signLocations) {
