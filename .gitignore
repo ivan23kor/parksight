@@ -56,3 +56,4 @@ debug_detect_tiles/
 
 # OSM streets database (>100MB, download separately)
 backend/data/streets.db
+.venv/
