@@ -15,6 +15,7 @@ const MIME_TYPES = {
 };
 
 const PORT = 8080;
+const BACKEND_PORT = process.env.BACKEND_PORT || 8000;
 const API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 const LEGACY_UI_PATHS = ['/ui-map', '/ui-panorama', '/ui-upload', '/dist'];
 
@@ -139,6 +140,45 @@ const server = http.createServer((req, res) => {
             }
         });
         req.on('error', () => { try { res.writeHead(500); res.end(); } catch (_) {} });
+        return;
+    }
+
+    // ── Reverse proxy: /api/* → backend ──
+    if (requestUrl.pathname.startsWith('/api/') || requestUrl.pathname === '/api') {
+        const targetPath = path.posix.normalize(requestUrl.pathname.slice(4) || '/');
+        if (targetPath.startsWith('..')) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'invalid path' }));
+            return;
+        }
+        const search = requestUrl.search || '';
+        const proxyOpts = {
+            hostname: '127.0.0.1',
+            port: BACKEND_PORT,
+            path: targetPath + search,
+            method: req.method,
+            headers: { ...req.headers, host: `127.0.0.1:${BACKEND_PORT}` },
+        };
+        const proxyReq = http.request(proxyOpts, (proxyRes) => {
+            res.writeHead(proxyRes.statusCode, proxyRes.headers);
+            proxyRes.pipe(res);
+        });
+        proxyReq.setTimeout(30000, () => {
+            proxyReq.destroy();
+            if (!res.headersSent) {
+                res.writeHead(504, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'backend timeout' }));
+            }
+        });
+        proxyReq.on('error', (err) => {
+            const status = err.code === 'ECONNREFUSED' ? 502 : 500;
+            console.error(`Proxy error: ${err.code} ${err.message}`);
+            if (!res.headersSent) {
+                res.writeHead(status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'backend unavailable' }));
+            }
+        });
+        req.pipe(proxyReq);
         return;
     }
 
