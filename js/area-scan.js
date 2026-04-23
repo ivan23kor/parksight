@@ -363,7 +363,14 @@ async function startAreaScan(polygonFeature) {
     [bbox[1], bbox[0]], // SW
     [bbox[3], bbox[2]], // NE
   );
-  const allWays = await fetchStreets(bounds).catch(() => []);
+  let allWays;
+  try {
+    allWays = await fetchStreets(bounds);
+  } catch (err) {
+    log.error("[area-scan] aborting — fetchStreets failed", err);
+    _updateStatus("Scan failed — check console");
+    return;
+  }
   state.allWays = allWays;
 
   // Filter to ways inside polygon
