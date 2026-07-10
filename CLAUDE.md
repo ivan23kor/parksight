@@ -6,102 +6,105 @@ alwaysApply: true
 # PARKSIGHT AGENT GUIDE
 
 ## Repo Structure
-1. **Static app** (`index.html`) — Leaflet + Turf + Google Maps JS API
-2. **Upload UI** (`ui-upload/`) — shadcn/ui component library
-3. **Backend** (`backend/`) — FastAPI YOLO11 detection service
+
+1. **Static app** (`index.html`, `js/`) - Leaflet, Turf, Google Maps JS API, Google Street View, and area scanning.
+2. **Backend** (`backend/`) - FastAPI service for streets, YOLO11 detection, Street View tile crops, preview images, and OCR parsing.
+3. **Upload UI** (`ui-upload/`) - shadcn/ui image upload workflow.
+4. **Training** (`datasets/`, `notebooks/`) - dataset build scripts and Kaggle notebooks.
+
+Read the nearest module `CLAUDE.md` before changing code in that area:
+
+- `backend/CLAUDE.md`
+- `js/CLAUDE.md`
+- `notebooks/CLAUDE.md`
+- `tests/CLAUDE.md`
+- `ui-upload/CLAUDE.md`
+
+## Tracking
+
+Major unfinished work is tracked in GitHub issues, not local TODO docs.
+
+- #1 - Make startup fail clearly when required runtime assets are missing
+- #2 - Validate production YOLO/OCR quality with real Street View failure cases
+- #3 - Fix Street View tile crop alignment and tilt calibration
+
+Do not recreate historical experiment reports, completed implementation plans, or minor TODO lists as repo docs. Add durable architecture and operating guidance to the closest `CLAUDE.md`; put actionable project work in GitHub issues.
 
 ## Commands
 
 ### Run Stack
+
 ```bash
-GOOGLE_MAPS_API_KEY=... bun run start    # Backend + web server
-GOOGLE_MAPS_API_KEY=... bun run start:web # Full stack, detection works
-GOOGLE_MAPS_API_KEY=... bun run serve:static # Backend-free mode
-GOOGLE_MAPS_API_KEY=... bun run start:backend # Backend only
-python3 serve.py  # Python-based static serve
+GOOGLE_MAPS_API_KEY=... bun run start
+GOOGLE_MAPS_API_KEY=... bun run serve:static
+GOOGLE_MAPS_API_KEY=... bun run start:backend
+python3 serve.py
 ```
 
 ### Build UI
+
 ```bash
 cd ui-upload && bun install && bun run build
 ```
 
 ### Tests
+
 ```bash
 bun install && bunx playwright install chromium && bun run test:e2e
 ```
-**Debug:** `npx playwright test --debug` | `PWDEBUG=1 npx playwright test` | `HEADLESS=false npx playwright test`
+
+Debug:
+
+```bash
+npx playwright test --debug
+PWDEBUG=1 npx playwright test
+HEADLESS=false npx playwright test
+```
 
 ### ML Training
+
 ```bash
-python3 datasets/build_unified_dataset.py  # Build dataset
-# Upload datasets/parking-sign-detection-coco-dataset/ to Kaggle
-# Import notebook from notebooks/
+python3 datasets/build_unified_dataset.py
+# Upload datasets/parking-sign-detection-coco-dataset/ to Kaggle.
+# Import notebooks from notebooks/.
 ```
 
 ## Test Rules
+
 - Always run tests: `bun run test:e2e`
-- **Mandatory analysis after each run:**
-  - Locate `test-results/<test>/trace.zip`
-  - Check console logs for errors, warnings, failed requests
-  - Check screenshots/videos if present
-  - Report: confirmed issues, warnings, performance insights, hypotheses, recommendations
+- After each run, inspect `test-results/<test>/trace.zip` when present.
+- Check console logs, failed requests, screenshots, and videos before reporting results.
+- Report confirmed issues, warnings, performance observations, hypotheses, and recommendations separately.
 
 ## Eval Rules
-- Evals simulate real user behavior. No stubs, no mocks, no synthetic data injection.
-- `page.evaluate()` for reading state only — never for injecting data or bypassing UI flow.
-- Real API keys from env. Real backend. Real external APIs. Fail fast if missing.
-- Black/empty panels where real content should appear = eval is broken.
+
+- Evals simulate real user behavior. No stubs, mocks, or synthetic data injection.
+- `page.evaluate()` may read state only; do not use it to inject data or bypass UI flow.
+- Use real API keys from env, the real backend, and real external APIs.
+- Fail fast if required env or backend state is missing.
+- Black/empty panels where map or panorama content should appear mean the eval is broken.
 - See `.claude/skills/write-eval-spec.md` for full eval philosophy.
 
 ## Architecture
 
-### Static App (`index.html`)
-```
+The static app is rooted at `index.html` with supporting modules in `js/`.
+
+```text
 config.js           # Google API key + detection config
 js/
 ├── utils.js        # Progress bar, error display
-├── streets.js      # Overpass API, street sampling, intersection detection
-├── panorama.js     # Shared panorama config (pitch, zoom, heading)
-├── streetview.js   # Session tokens, panoIds bulk fetch
-└── detection.js    # YOLO detection API calls
+├── streets.js      # Street fetching, sampling, intersections
+├── panorama.js     # Shared panorama config
+├── streetview.js   # Session tokens, pano IDs, metadata
+└── detection.js    # Detection, crops, OCR, sign location
 index.html          # Split panorama/2D map view
 ```
 
-**Key pieces:**
-- Map rendering: Leaflet + OSM tiles
-- Selection workflow: draw rectangle → fetch streets → check Street View
-- External APIs: Overpass API, Google Map Tiles API, Google Maps JS API
-- Layers: `streetsLayer`, `streetViewDotsLayer`, `selectionLayer`
-- Driver perspective: Heading ± 45°, handles OSM `oneway` tag
-
-**Config coupling:** `config.js` exports `GOOGLE_CONFIG.API_KEY` + `DETECTION_CONFIG`. Session tokens cached in `localStorage` (~13 days)
-
-### Upload UI (`ui-upload/`)
-shadcn/ui component library. Build: `bun install && bun run build`
-
-### Backend (`backend/`)
-FastAPI YOLO11 inference service.
-
-**Endpoints:**
-- `GET /health` — Health check
-- `POST /detect` — Single image detection
-- `POST /detect-single-pano` — Panorama detection (single image)
-- `POST /crop-sign-tiles` — Fetch/stitch/crop Street View tiles
-- `POST /preview-sign` — Sign-centered Street View
-- `GET /detect-debug` — Image with bounding boxes
-
-**Model:** YOLO11m, 1 class (`parking_sign`). Download from Kaggle → `backend/models/best.pt`
-
-**Streets DB:** `backend/data/streets.db` — OSM streets SQLite database (~174 MB). Not in git (exceeds 100 MB limit). Rebuild locally: `python3 backend/ingest_osm.py path/to/region-latest.osm.pbf`
-
-**Detected signs:** Saved to `detected_signs/`, served at `/detected-signs/`
-
-### ML Training (`datasets/`, `notebooks/`)
-Raw datasets → `build_unified_dataset.py` → single-class YOLO dataset (512x512). Training notebooks in `notebooks/` (numbered). See `notebooks/EXPERIMENT_7_README.md`
+Detection calls go through `/api` in the web app and are proxied to the backend by `serve.js`.
 
 ## Sharp Edges
-- `package.json` references `src/index.html` but actual source is `index.html` (no `src/`)
-- `run-sign-detector.sh` + `start-sign-detector.sh` → `scripts/start-stack.sh`
-- Detection requires backend on `http://127.0.0.1:8000` — `bun run start` + `bun run start:web` start full stack; `serve:static` backend-free on purpose
-- Training on Kaggle, not locally — no Docker setup
+
+- `package.json` references `src/index.html` in some historical context, but the actual source is `index.html`.
+- Detection requires the backend; `serve:static` is backend-free on purpose.
+- Large runtime assets are not all committed. See `backend/CLAUDE.md`.
+- Training is designed for Kaggle, not local long-running GPU training. There is no Docker setup.
