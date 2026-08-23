@@ -11,6 +11,7 @@ import re
 import json as _json
 import time
 import traceback
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any
@@ -547,7 +548,121 @@ async def get_streets(south: float, west: float, north: float, east: float):
     try:
         ways = _query_streets(south, west, north, east)
     except FileNotFoundError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        print(f"{e} Falling back to OSM map API.")
+        ways = await _query_streets_osm_api(south, west, north, east)
+    return ways
+
+
+async def _query_streets_osm_api(south: float, west: float, north: float, east: float) -> list[dict]:
+    """Fetch OSM ways from the public map API when the local streets DB is unavailable."""
+    osm_url = os.environ.get("OSM_MAP_API_URL", "https://api.openstreetmap.org/api/0.6/map")
+    excluded = {
+        "footway", "path", "cycleway", "steps", "pedestrian", "service", "track",
+        "bridleway", "corridor", "elevator", "escalator", "proposed", "construction",
+    }
+
+    client = httpx_client
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient()
+        close_client = True
+
+    try:
+        resp = await client.get(
+            osm_url,
+            params={"bbox": f"{west},{south},{east},{north}"},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=503, detail=f"OSM streets query failed: {e}") from e
+    finally:
+        if close_client:
+            await client.aclose()
+
+    root = ET.fromstring(resp.text)
+    nodes = {
+        node.attrib["id"]: {
+            "lat": float(node.attrib["lat"]),
+            "lon": float(node.attrib["lon"]),
+        }
+        for node in root.findall("node")
+    }
+
+    ways = []
+    for way in root.findall("way"):
+        tags = {tag.attrib["k"]: tag.attrib["v"] for tag in way.findall("tag")}
+        highway = tags.get("highway")
+        if not highway or highway in excluded:
+            continue
+
+        geometry = []
+        for nd in way.findall("nd"):
+            node = nodes.get(nd.attrib.get("ref"))
+            if node:
+                geometry.append(node)
+        if len(geometry) < 2:
+            continue
+
+        ways.append({
+            "id": int(way.attrib["id"]),
+            "geometry": geometry,
+            "tags": {
+                "name": tags.get("name"),
+                "highway": highway,
+                "oneway": tags.get("oneway"),
+                "lanes": tags.get("lanes"),
+            },
+        })
+
+    return ways
+
+
+async def _query_streets_overpass(south: float, west: float, north: float, east: float) -> list[dict]:
+    """Fetch OSM ways from Overpass when the local streets DB is unavailable."""
+    overpass_url = os.environ.get("OVERPASS_API_URL", "https://overpass-api.de/api/interpreter")
+    excluded = "footway|path|cycleway|steps|pedestrian|service|track|bridleway|corridor|elevator|escalator|proposed|construction"
+    query = f"""
+    [out:json][timeout:25];
+    (
+      way["highway"]["highway"!~"{excluded}"]({south},{west},{north},{east});
+    );
+    out tags geom;
+    """
+
+    client = httpx_client
+    close_client = False
+    if client is None:
+        client = httpx.AsyncClient()
+        close_client = True
+
+    try:
+        resp = await client.post(overpass_url, data={"data": query}, timeout=30.0)
+        resp.raise_for_status()
+        data = resp.json()
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=503, detail=f"Overpass streets query failed: {e}") from e
+    finally:
+        if close_client:
+            await client.aclose()
+
+    ways = []
+    for element in data.get("elements", []):
+        geometry = element.get("geometry") or []
+        if element.get("type") != "way" or len(geometry) < 2:
+            continue
+        tags = element.get("tags") or {}
+        ways.append({
+            "id": element.get("id"),
+            "geometry": [{"lat": node["lat"], "lon": node["lon"]} for node in geometry],
+            "tags": {
+                "name": tags.get("name"),
+                "highway": tags.get("highway"),
+                "oneway": tags.get("oneway"),
+                "lanes": tags.get("lanes"),
+            },
+        })
+
     return ways
 
 
