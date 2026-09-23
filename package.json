@@ -1,25 +1,8 @@
 {
-  "name": "parking-map",
-  "version": "1.0.0",
-  "description": "Parking Map - Map & Upload detection UIs",
+  "name": "parksight-calgary-tower",
+  "private": true,
   "scripts": {
-    "build": "cd ui-upload && bun install && bun run build",
-    "serve": "node serve.js",
-    "serve:static": "node serve.js",
-    "start:backend": "bash ./scripts/start-backend.sh",
-    "start": "bash ./scripts/start-stack.sh",
-    "test:e2e": "bunx playwright test",
-    "test:e2e:headed": "bunx playwright test --headed"
-  },
-  "keywords": [
-    "parking",
-    "detection",
-    "yolo",
-    "street-view"
-  ],
-  "author": "",
-  "license": "MIT",
-  "devDependencies": {
-    "@playwright/test": "^1.52.0"
+    "start": "uv run uvicorn backend.app:app --host 127.0.0.1 --port 8080",
+    "refresh:data": "python3 scripts/refresh-calgary-data.py && python3 scripts/refresh-calgary-signs.py && python3 scripts/build-overlay.py"
   }
 }

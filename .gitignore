@@ -1,59 +1,8 @@
-# Dependencies
-node_modules/
-npm-debug.log*
-bun.lockb
-
-# Distribution
-dist/
-
-# Next.js build output
-ui-upload/.next/
-ui-upload/node_modules/
-ui-upload/out/
-
-# Python cache
+.venv/
 __pycache__/
 *.pyc
-
-# IDE
-.vscode/
-.idea/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
+.env
+.env.local
 *.log
-
-# Python virtual environment
-venv/
-
-# Large datasets (upload to Kaggle separately)
-datasets/
-
-# Detection images for debugging
-detection_images/
-
-# Cropped detected parking signs
-detected_signs/
-*.png\nplot_*.py
-
-# Playwright test output
+.DS_Store
 test-results/
-
-# Playwright trace files
-*.trace
-
-# Eval run artifacts (ephemeral)
-evals/runs/
-
-# Benchmark crops and results
-benchmark/
-
-# Debug tile detection output
-debug_detect_tiles/
-
-# OSM streets database (>100MB, download separately)
-backend/data/streets.db
-.venv/
