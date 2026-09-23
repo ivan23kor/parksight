@@ -1,0 +1,7 @@
+# Sign evidence for the Calgary pilot
+
+`data/calgary-tower-sign-evidence.json` contains reviewed crops from independently usable street photos. It starts empty because the current curb colors come from City zone records, and the City sign inventory supplies no photos.
+
+Each `items` entry has a stable string `id`, a locally served `crop_url`, `source_label`, `captured_at`, `sign_ids` from the City sign inventory, and `decision_zone_ids` from the curb overlay. Add a curb ID to `decision_zone_ids` only when the reviewed crop actually informed that curb's decision; proximity alone does not count. `reading` holds the reviewed `is_parking_sign`, `raw_text`, `confidence`, `model`, and `rules` returned by the sign reader. The browser displays a crop only when its record explicitly names the clicked curb or sign ID; a photo near the feature is not sufficient.
+
+Clicking a curb line opens a map popup with the City designation and any sign crops explicitly linked to that curb decision. Clicking a purple sign marker opens a popup for the signs on that City post; each sign without a linked crop gets a labeled City-record text preview. Empty evidence means the popup says no crop contributed and no image decision was evaluated. If the evidence file fails to load, the popup reports that its photo status is unknown instead of claiming it has none.
