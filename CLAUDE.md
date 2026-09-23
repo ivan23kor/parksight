@@ -1,110 +1,26 @@
----
-description: Parksight project guidance for AI agents
-alwaysApply: true
----
+# ParkSight: Calgary Tower pilot
 
-# PARKSIGHT AGENT GUIDE
+ParkSight maps City of Calgary curb zones and active parking signs in the four blocks between 1 Street SW, 1 Street SE, 8 Avenue, and 10 Avenue. The app shows a legend and City layers on one Google map, with a manual Street View panorama beside it. Clicking a curb or sign opens its nearby panorama and an evidence popup on the map. The popup identifies City-only records when no reviewed sign photo is linked to that curb decision or sign.
 
-## Repo Structure
+## Run
 
-1. **Static app** (`index.html`, `js/`) - Leaflet, Turf, Google Maps JS API, Google Street View, and area scanning.
-2. **Backend** (`backend/`) - FastAPI service for streets, YOLO11 detection, Street View tile crops, preview images, and OCR parsing.
-3. **Upload UI** (`ui-upload/`) - shadcn/ui image upload workflow.
-4. **Training** (`datasets/`, `notebooks/`) - dataset build scripts and Kaggle notebooks.
+Set GOOGLE_MAPS_BROWSER_KEY in the environment or a local .env file, then run: bun run start. GOOGLE_MAPS_BROWSER_KEY_FILE can point to an existing local key file instead of copying the secret into .env.
 
-Read the nearest module `CLAUDE.md` before changing code in that area:
+Open http://127.0.0.1:8080. The map and manual Street View walker require the Maps JavaScript API. The portable City overlay files can be used independently in other map tools. The retained backend can read independently sourced photos with Gemini 3.5 Flash-Lite when a separate evidence workflow supplies them.
 
-- `backend/CLAUDE.md`
-- `js/CLAUDE.md`
-- `notebooks/CLAUDE.md`
-- `tests/CLAUDE.md`
-- `ui-upload/CLAUDE.md`
+## Data and code
 
-## Tracking
+- data/calgary-tower-zones.geojson is a clipped snapshot of the City of Calgary's On-Street Parking Zones (https://data.calgary.ca/d/rhkg-vwwp), with source and retrieval date embedded.
+- data/calgary-tower-signs.geojson is a snapshot of the City's Traffic Signs inventory (https://data.calgary.ca/d/u6ce-yibw), filtered to parking-related sign blades on active posts, with source and retrieval date embedded. A City record with missing sign text shows its sign code; it is not presented as a visually verified reading.
+- data/calgary-tower-curb-overlay.geojson and .kml are portable color-coded curb layers built from the City zone snapshot. They show designated curb use, not whether parking is allowed at the current time.
+- data/calgary-tower-sign-evidence.json links independently sourced sign crops to City sign IDs and curb decision IDs. It is empty until real photos are reviewed; a City-only segment or sign must show that no photo decision exists.
+- bun run refresh:data refreshes both City snapshots and rebuilds the portable overlay files.
+- web/ holds the map, panorama walker, and on-map evidence popups.
+- backend/ retains the API, photo-only YOLO sign detection, and Gemini reading for evidence ingestion.
+- backend/models/best.pt is the existing trained model; backend/models/best_openvino_model/ is its CPU-optimized runtime copy.
 
-Major unfinished work is tracked in GitHub issues, not local TODO docs.
+The City layers are official curb-zone and sign-inventory data. The map popup only presents a crop as decision evidence when the evidence record explicitly links its ID to a curb decision or City sign. City inventory signs are not visually verified until supported by independent photo evidence. The legend colors identify curb designations, not current parking availability.
 
-- #1 - Make startup fail clearly when required runtime assets are missing
-- #2 - Validate production YOLO/OCR quality with real Street View failure cases
-- #3 - Fix Street View tile crop alignment and tilt calibration
+Google Map Tiles API disallows image analysis and object detection, so the walker never sends Google imagery to the model or Gemini. The portable overlay uses City data, not information extracted from Google imagery. Google Maps Platform terms also restrict combining Google Maps services with a non-Google map in one app, so the interactive app has one Google map while the City overlay can be imported into independent map tools.
 
-Do not recreate historical experiment reports, completed implementation plans, or minor TODO lists as repo docs. Add durable architecture and operating guidance to the closest `CLAUDE.md`; put actionable project work in GitHub issues.
-
-## Commands
-
-### Run Stack
-
-```bash
-GOOGLE_MAPS_API_KEY=... bun run start
-GOOGLE_MAPS_API_KEY=... bun run serve:static
-GOOGLE_MAPS_API_KEY=... bun run start:backend
-python3 serve.py
-```
-
-### Build UI
-
-```bash
-cd ui-upload && bun install && bun run build
-```
-
-### Tests
-
-```bash
-bun install && bunx playwright install chromium && bun run test:e2e
-```
-
-Debug:
-
-```bash
-npx playwright test --debug
-PWDEBUG=1 npx playwright test
-HEADLESS=false npx playwright test
-```
-
-### ML Training
-
-```bash
-python3 datasets/build_unified_dataset.py
-# Upload datasets/parking-sign-detection-coco-dataset/ to Kaggle.
-# Import notebooks from notebooks/.
-```
-
-## Test Rules
-
-- Always run tests: `bun run test:e2e`
-- After each run, inspect `test-results/<test>/trace.zip` when present.
-- Check console logs, failed requests, screenshots, and videos before reporting results.
-- Report confirmed issues, warnings, performance observations, hypotheses, and recommendations separately.
-
-## Eval Rules
-
-- Evals simulate real user behavior. No stubs, mocks, or synthetic data injection.
-- `page.evaluate()` may read state only; do not use it to inject data or bypass UI flow.
-- Use real API keys from env, the real backend, and real external APIs.
-- Fail fast if required env or backend state is missing.
-- Black/empty panels where map or panorama content should appear mean the eval is broken.
-- See `.claude/skills/write-eval-spec.md` for full eval philosophy.
-
-## Architecture
-
-The static app is rooted at `index.html` with supporting modules in `js/`.
-
-```text
-config.js           # Google API key + detection config
-js/
-├── utils.js        # Progress bar, error display
-├── streets.js      # Street fetching, sampling, intersections
-├── panorama.js     # Shared panorama config
-├── streetview.js   # Session tokens, pano IDs, metadata
-└── detection.js    # Detection, crops, OCR, sign location
-index.html          # Split panorama/2D map view
-```
-
-Detection calls go through `/api` in the web app and are proxied to the backend by `serve.js`.
-
-## Sharp Edges
-
-- `package.json` references `src/index.html` in some historical context, but the actual source is `index.html`.
-- Detection requires the backend; `serve:static` is backend-free on purpose.
-- Large runtime assets are not all committed. See `backend/CLAUDE.md`.
-- Training is designed for Kaggle, not local long-running GPU training. There is no Docker setup.
+Keep the app centered on producing an accurate small Calgary map. A human must review each sign before adding photo evidence to a curb decision.

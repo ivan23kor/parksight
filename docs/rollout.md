@@ -1,0 +1,11 @@
+# From Calgary Tower to wider coverage
+
+The Calgary Tower pilot has one portable curb layer. Each line has a stable source-backed ID, jurisdiction, timezone, curb-use category, original enforcement text, source URL, retrieval date, and verification state. GeoJSON is the common layer for Google Maps and other map SDKs; KML is an import format for map tools that accept it.
+
+The map must distinguish three things: an official curb designation, a sign observed in a dated street photo, and whether parking is allowed at a specific time. The current colors show only the first. Uncolored curbs are unknown, not no-parking. The City sign inventory is mapped, but its signs remain visually unverified until an independent photo or field observation is linked to each record. Clicking a curb or sign opens its evidence popup on the map and aims Street View nearby. The popup shows actual sign crops only when the evidence registry explicitly links a reviewed photo to that City sign or curb decision; otherwise it shows the City record and states that no photo decision exists. The main page contains only the legend, map, and Street View panorama.
+
+Google imagery is a navigation view only. The [Google Maps Platform Terms, section 3.2.3](https://cloud.google.com/maps-platform/terms) restrict extracting Maps content and creating a new dataset from it; the [Map Tiles API policy](https://developers.google.com/maps/documentation/tile/policies) specifically excludes image analysis, object detection, and geodata extraction. Sign observations need independently usable photos or field evidence.
+
+Expansion proceeds one jurisdiction at a time. A source adapter converts local curb and sign records to the same feature fields, records the license and update date, and marks gaps. An imagery adapter accepts street photos that permit extraction and keeps their license, capture date, and source link with each observation. A reviewer resolves conflicts, missing signs, and seasonal or temporary rules before a segment can be labeled as verified.
+
+When an area grows beyond a small file, publish only nearby features through spatial queries and vector tiles. Schedule rules must use the source jurisdiction's timezone and effective dates. The product can then extend across cities and countries while preserving where coverage ends and what evidence supports each colored curb.
