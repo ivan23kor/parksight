@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#103b35">
+    <title>ParkSight · Calgary Tower</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23103b35'/%3E%3Ctext x='32' y='45' fill='white' font-size='41' text-anchor='middle' font-family='Arial'%3EP%3C/text%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/google.css">
+    <script type="module" src="/google.js"></script>
+  </head>
+  <body>
+    <main class="workspace">
+      <section class="map-pane" aria-label="Calgary Tower parking map">
+        <div id="googleMap" role="application" aria-label="Google map with Calgary curb and sign layers"></div>
+        <div class="legend" aria-label="Map legend">
+          <span><i class="swatch parking"></i>Parking</span>
+          <span><i class="swatch loading"></i>Loading</span>
+          <span><i class="swatch taxi"></i>Taxi</span>
+          <span><i class="swatch other"></i>Other</span>
+          <label class="sign-toggle"><input id="showCitySigns" type="checkbox" checked><i class="swatch city-sign"></i>City signs</label>
+        </div>
+      </section>
+      <aside class="streetview-pane" aria-label="Street View panorama">
+        <div id="streetview" aria-label="Google Street View panorama"></div>
+        <p id="viewerStatus" class="viewer-error" role="status" hidden></p>
+      </aside>
+    </main>
+  </body>
+</html>
