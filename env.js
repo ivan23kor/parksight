@@ -1,1 +1,0 @@
-window.env = window.env || {};
