@@ -1,6 +1,6 @@
 import { PILOT } from "./config.js";
 
-function bearing(from, to) {
+export function bearing(from, to) {
   const radians = Math.PI / 180;
   const first = from.lat() * radians;
   const second = to.lat * radians;

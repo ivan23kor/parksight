@@ -50,9 +50,6 @@ body { min-width: 320px; }
 .crop-link img { display: block; width: 100%; max-height: 180px; object-fit: contain; }
 .photo-check { margin-top: 6px; }
 .check-city { margin: 0 0 7px; color: #60766b; font-size: 11px; }
-.check-button { position: relative; display: inline-block; padding: 7px 12px; border-radius: 6px; background: #12362f; color: #fff; font-size: 12px; font-weight: 700; cursor: pointer; }
-.check-button:hover { background: #1d4d43; }
-.check-input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; border: 0; white-space: nowrap; color: transparent; clip: rect(0, 0, 0, 0); clip-path: inset(50%); }
 .check-hint { margin: 6px 0 0; color: #60766b; font-size: 10.5px; line-height: 1.4; }
 .check-status { margin: 8px 0 0; color: #587164; font-size: 12px; }
 .crop-frame { position: relative; overflow: hidden; border-radius: 5px; background: #eef1eb; }

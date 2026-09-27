@@ -1,6 +1,6 @@
 # ParkSight: Calgary Tower pilot
 
-ParkSight maps City of Calgary curb zones and active parking signs in the four blocks between 1 Street SW, 1 Street SE, 8 Avenue, and 10 Avenue. The app shows a legend and City layers on one Google map, with a manual Street View panorama beside it. Clicking a curb or sign opens its nearby panorama and an evidence popup on the map. The popup identifies City-only records when no reviewed sign photo is linked to that curb decision or sign.
+ParkSight maps City of Calgary curb zones and active parking signs in the four blocks between 1 Street SW, 1 Street SE, 8 Avenue, and 10 Avenue. The app shows a legend and City layers on one Google map, with a manual Street View panorama beside it. Clicking a curb or sign opens its nearby panorama and an evidence popup on the map. The popup identifies City-only records when no reviewed sign photo is linked to that curb decision or sign. Sign clicks also run a local verification analysis of the nearest Street View frame.
 
 ## Run
 
@@ -21,6 +21,6 @@ Open http://127.0.0.1:8080. The map and manual Street View walker require the Ma
 
 The City layers are official curb-zone and sign-inventory data. The map popup only presents a crop as decision evidence when the evidence record explicitly links its ID to a curb decision or City sign. City inventory signs are not visually verified until supported by independent photo evidence. The legend colors identify curb designations, not current parking availability.
 
-Google Map Tiles API disallows image analysis and object detection, so the walker never sends Google imagery to the model or Gemini. The portable overlay uses City data, not information extracted from Google imagery. Google Maps Platform terms also restrict combining Google Maps services with a non-Google map in one app, so the interactive app has one Google map while the City overlay can be imported into independent map tools.
+Google Map Tiles API disallows image analysis and object detection, so product builds must not send Google imagery to the model or Gemini; a temporary local verification mode analyzes a few ephemeral frames to test the detector and never stores or publishes them. The portable overlay uses City data, not information extracted from Google imagery. Google Maps Platform terms also restrict combining Google Maps services with a non-Google map in one app, so the interactive app has one Google map while the City overlay can be imported into independent map tools.
 
 Keep the app centered on producing an accurate small Calgary map. A human must review each sign before adding photo evidence to a curb decision.

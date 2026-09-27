@@ -1,3 +1,5 @@
+import { bearing } from "./walker.js";
+
 const DATA_URL = "/data/calgary-tower-sign-evidence.json";
 
 function add(parent, tag, value, className) {
@@ -48,6 +50,8 @@ export class EvidenceViewer {
   constructor() {
     this.items = [];
     this.available = false;
+    this.streetViewCache = new Map();
+    this.googleKeyValue = null;
   }
 
   async load() {
@@ -183,79 +187,106 @@ export class EvidenceViewer {
     }
   }
 
-  async runPhotoCheck(results, file) {
-    results.replaceChildren();
-    const status = add(results, "p", "", "check-status");
-    if (!file.type.startsWith("image/")) {
-      status.textContent = "That file is not an image.";
-      return;
-    }
-    if (file.size > 8000000) {
-      status.textContent = "That photo is too large (8 MB limit).";
-      return;
-    }
-    status.textContent = "Finding signs…";
-    let image_base64 = "";
-    try {
-      const dataUrl = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = () => reject(new Error("read"));
-        reader.readAsDataURL(file);
+  async googleKey() {
+    if (this.googleKeyValue) return this.googleKeyValue;
+    const response = await fetch("/api/config");
+    if (!response.ok) throw new Error("Map settings could not load");
+    const config = await response.json();
+    if (!config.google_maps_key) throw new Error("Google Maps is not configured");
+    this.googleKeyValue = config.google_maps_key;
+    return this.googleKeyValue;
+  }
+
+  async streetViewPhoto(lat, lng) {
+    const key = await this.googleKey();
+    const pano = await new Promise((resolve, reject) => {
+      new google.maps.StreetViewService().getPanorama({
+        location: { lat, lng },
+        radius: 90,
+        sources: [google.maps.StreetViewSource.GOOGLE, google.maps.StreetViewSource.OUTDOOR],
+        preference: google.maps.StreetViewPreference.NEAREST,
+      }, (data, status) => {
+        if (status === google.maps.StreetViewStatus.OK && data?.location?.pano) resolve(data);
+        else reject(new Error("No Street View near this sign."));
       });
-      image_base64 = String(dataUrl).split(",", 2)[1] || "";
+    });
+    const heading = Math.round(bearing(pano.location.latLng, { lat, lng }));
+    const url = "https://maps.googleapis.com/maps/api/streetview?size=640x480&fov=60&pitch=10&pano="
+      + encodeURIComponent(pano.location.pano) + "&heading=" + heading + "&key=" + encodeURIComponent(key);
+    const image = await new Promise((resolve, reject) => {
+      const element = new Image();
+      element.crossOrigin = "anonymous";
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("The Street View image could not load."));
+      element.src = url;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    canvas.getContext("2d").drawImage(image, 0, 0);
+    try {
+      return canvas.toDataURL("image/jpeg", 0.92).split(",", 2)[1] || "";
     } catch {
-      status.textContent = "That photo could not be read.";
-      return;
+      throw new Error("The Street View image cannot be used here.");
+    }
+  }
+
+  async runStreetViewCheck(results, post) {
+    results.replaceChildren();
+    const status = add(results, "p", "Analyzing Street View…", "check-status");
+    const cacheKey = post.postId || post.lat + "," + post.lng;
+    if (!this.streetViewCache.has(cacheKey)) {
+      this.streetViewCache.set(cacheKey, (async () => {
+        const image_base64 = await this.streetViewPhoto(post.lat, post.lng);
+        if (!image_base64) throw new Error("The Street View image could not be read.");
+        return this.postJson("/api/detect-photo", { image_base64 });
+      })());
     }
     let found = [];
     try {
-      const payload = await this.postJson("/api/detect-photo", { image_base64 });
+      const payload = await this.streetViewCache.get(cacheKey);
       if (Array.isArray(payload.detections)) found = payload.detections;
     } catch (error) {
+      this.streetViewCache.delete(cacheKey);
       status.textContent = error.message;
       return;
     }
+    add(results, "p", "Imagery © Google · verification only, never stored or published.", "check-hint");
     if (!found.length) {
-      status.textContent = "No parking signs found in this photo.";
+      status.textContent = "No parking signs found in this Street View image.";
       return;
     }
     status.remove();
     found.forEach((detection, index) => this.detectionCard(results, detection, index === 0));
   }
 
-  photoCheck(root) {
+  streetViewCheck(root, post, signs) {
+    for (const sign of signs) add(root, "h4", sign.type || "Parking sign", "sign-heading");
     const wrap = add(root, "div", null, "photo-check");
     add(wrap, "p", "City record · no reviewed photo", "check-city");
-    const label = add(wrap, "label", "Check from your photo", "check-button");
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/*";
-    input.className = "check-input";
-    label.append(input);
-    add(wrap, "p", "Use a street photo you took yourself. Screenshots of Street View cannot be analyzed.", "check-hint");
     const results = add(wrap, "div", null, "check-results");
-    input.addEventListener("change", () => {
-      const file = input.files?.[0];
-      input.value = "";
-      if (file) this.runPhotoCheck(results, file);
-    });
+    this.runStreetViewCheck(results, post);
   }
 
   signContent(post) {
     const signs = Array.isArray(post.signs) ? post.signs : [];
     const root = this.popup("City sign post", signs.length + " inventory sign" + (signs.length === 1 ? "" : "s"));
     if (!this.available) add(root, "p", "Photo evidence is unavailable; image decisions are unknown.", "evidence-empty");
-    if (!signs.length) add(root, "p", "No City sign details are available for this post.", "evidence-empty");
+    if (!signs.length) {
+      add(root, "p", "No City sign details are available for this post.", "evidence-empty");
+      return root;
+    }
+    const unlinked = [];
     for (const sign of signs) {
-      add(root, "h4", sign.type || "Parking sign", "sign-heading");
       const photos = this.available ? linked(this.items, "sign_ids", sign.id) : [];
-      if (photos.length) {
-        for (const item of photos) this.photo(root, item);
+      if (!photos.length) {
+        unlinked.push(sign);
         continue;
       }
-      this.photoCheck(root);
+      add(root, "h4", sign.type || "Parking sign", "sign-heading");
+      for (const item of photos) this.photo(root, item);
     }
+    if (unlinked.length) this.streetViewCheck(root, post, unlinked);
     return root;
   }
 }
