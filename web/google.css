@@ -48,10 +48,20 @@ body { min-width: 320px; }
 .evidence-card { margin-top: 9px; padding: 9px; border: 1px solid #dce8df; border-radius: 7px; background: #fff; }
 .crop-link { display: block; overflow: hidden; border-radius: 5px; background: #eef1eb; }
 .crop-link img { display: block; width: 100%; max-height: 180px; object-fit: contain; }
-.record-sign { min-height: 88px; padding: 8px; border: 2px solid #a36689; border-radius: 5px; background: #fff; color: #3d3240; text-align: center; display: grid; align-content: center; gap: 4px; }
-.record-sign small { color: #795c6b; font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
-.record-sign strong { font-size: 14px; }
-.record-sign span { font-size: 11px; white-space: pre-line; }
+.photo-check { margin-top: 6px; }
+.check-city { margin: 0 0 7px; color: #60766b; font-size: 11px; }
+.check-button { display: inline-block; padding: 7px 12px; border-radius: 6px; background: #12362f; color: #fff; font-size: 12px; font-weight: 700; cursor: pointer; }
+.check-button:hover { background: #1d4d43; }
+.check-input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.check-hint { margin: 6px 0 0; color: #60766b; font-size: 10.5px; line-height: 1.4; }
+.check-status { margin: 8px 0 0; color: #587164; font-size: 12px; }
+.crop-frame { position: relative; overflow: hidden; border-radius: 5px; background: #eef1eb; }
+.crop-frame img { display: block; width: 100%; height: auto; }
+.crop-box { position: absolute; border: 2px solid #e9a324; border-radius: 2px; pointer-events: none; }
+.crop-confidence { position: absolute; left: 6px; bottom: 6px; padding: 2px 7px; border-radius: 4px; background: #12362fee; color: #fff; font-size: 11px; font-weight: 800; }
+.parse-button { margin-top: 8px; padding: 6px 11px; border: 1px solid #c4d6c9; border-radius: 6px; background: #fff; color: #254b3d; font-size: 12px; font-weight: 700; cursor: pointer; }
+.parse-button:hover { background: #eef4ee; }
+.reading-json { margin: 8px 0 0; padding: 8px; max-height: 180px; overflow: auto; border: 1px solid #dce8df; border-radius: 5px; background: #f2f6f1; color: #284b40; font: 10.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre; }
 .evidence-facts { display: grid; grid-template-columns: 88px minmax(0, 1fr); gap: 6px 8px; margin: 9px 0 0; font-size: 11px; line-height: 1.35; }
 .evidence-facts dt { color: #7b9185; font-weight: 650; }
 .evidence-facts dd { margin: 0; overflow-wrap: anywhere; color: #284b40; font-weight: 700; }

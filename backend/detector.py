@@ -32,6 +32,19 @@ def _overlap(a, b):
     return intersection / max(1, area_a + area_b - intersection)
 
 
+def _box_in_crop(box, bounds, size):
+    """Map a photo-space box to normalized crop coordinates, clamped to the crop."""
+    x1, y1, x2, y2 = box
+    left, top, _, _ = bounds
+    width, height = size
+    return [
+        round(min(max((x1 - left) / max(1, width), 0), 1), 4),
+        round(min(max((y1 - top) / max(1, height), 0), 1), 4),
+        round(min(max((x2 - left) / max(1, width), 0), 1), 4),
+        round(min(max((y2 - top) / max(1, height), 0), 1), 4),
+    ]
+
+
 def _crop_data(image: Image.Image, box):
     x1, y1, x2, y2 = box
     cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
@@ -44,12 +57,13 @@ def _crop_data(image: Image.Image, box):
         min(image.height, round(cy + height / 2)),
     )
     crop = image.crop(bounds)
+    normalized = _box_in_crop(box, bounds, crop.size)
     if crop.width < 640:
         scale = min(3, 640 / max(1, crop.width))
         crop = crop.resize((round(crop.width * scale), round(crop.height * scale)), Image.Resampling.LANCZOS)
     output = io.BytesIO()
     crop.save(output, format="JPEG", quality=88)
-    return base64.b64encode(output.getvalue()).decode("ascii")
+    return base64.b64encode(output.getvalue()).decode("ascii"), normalized
 
 
 def detect_photo(image: Image.Image) -> tuple[list[dict], int]:
@@ -87,8 +101,10 @@ def detect_photo(image: Image.Image) -> tuple[list[dict], int]:
 
     detections = []
     for confidence, box in accepted:
+        crop_base64, normalized = _crop_data(image, box)
         detections.append({
             "confidence": round(confidence, 3),
-            "crop_base64": _crop_data(image, box),
+            "box": normalized,
+            "crop_base64": crop_base64,
         })
     return detections, round((time.perf_counter() - started) * 1000)
