@@ -36,6 +36,15 @@ function linked(items, field, id) {
   return items.filter((item) => Array.isArray(item[field]) && item[field].some((linkedId) => linkedId === id));
 }
 
+export function rankByCenter(detections) {
+  const distance = (detection) => {
+    const box = Array.isArray(detection.box) ? detection.box : [];
+    if (box.length !== 4 || !box.every((value) => typeof value === "number")) return 2;
+    return Math.hypot((box[0] + box[2]) / 2 - 0.5, (box[1] + box[3]) / 2 - 0.5);
+  };
+  return [...detections].sort((a, b) => distance(a) - distance(b));
+}
+
 function imageDecision(reading) {
   if (!reading || typeof reading !== "object") return "Not evaluated from a photo";
   if (reading.is_parking_sign === false) return "Not a parking sign";
@@ -203,7 +212,7 @@ export class EvidenceViewer {
       new google.maps.StreetViewService().getPanorama({
         location: { lat, lng },
         radius: 90,
-        sources: [google.maps.StreetViewSource.GOOGLE, google.maps.StreetViewSource.OUTDOOR],
+        sources: [google.maps.StreetViewSource.OUTDOOR],
         preference: google.maps.StreetViewPreference.NEAREST,
       }, (data, status) => {
         if (status === google.maps.StreetViewStatus.OK && data?.location?.pano) resolve(data);
@@ -211,7 +220,7 @@ export class EvidenceViewer {
       });
     });
     const heading = Math.round(bearing(pano.location.latLng, { lat, lng }));
-    const url = "https://maps.googleapis.com/maps/api/streetview?size=640x480&fov=60&pitch=10&pano="
+    const url = "https://maps.googleapis.com/maps/api/streetview?size=640x480&fov=90&pitch=10&pano="
       + encodeURIComponent(pano.location.pano) + "&heading=" + heading + "&key=" + encodeURIComponent(key);
     const image = await new Promise((resolve, reject) => {
       const element = new Image();
@@ -245,7 +254,7 @@ export class EvidenceViewer {
     let found = [];
     try {
       const payload = await this.streetViewCache.get(cacheKey);
-      if (Array.isArray(payload.detections)) found = payload.detections;
+      if (Array.isArray(payload.detections)) found = rankByCenter(payload.detections);
     } catch (error) {
       this.streetViewCache.delete(cacheKey);
       status.textContent = error.message;
