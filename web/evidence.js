@@ -206,7 +206,7 @@ export class EvidenceViewer {
     return this.googleKeyValue;
   }
 
-  async streetViewPhoto(lat, lng) {
+  async streetViewAim(lat, lng) {
     const key = await this.googleKey();
     const pano = await new Promise((resolve, reject) => {
       new google.maps.StreetViewService().getPanorama({
@@ -219,9 +219,16 @@ export class EvidenceViewer {
         else reject(new Error("No Street View near this sign."));
       });
     });
-    const heading = Math.round(bearing(pano.location.latLng, { lat, lng }));
-    const url = "https://maps.googleapis.com/maps/api/streetview?size=640x480&fov=90&pitch=10&pano="
-      + encodeURIComponent(pano.location.pano) + "&heading=" + heading + "&key=" + encodeURIComponent(key);
+    return {
+      key,
+      pano: pano.location.pano,
+      heading: Math.round(bearing(pano.location.latLng, { lat, lng })),
+    };
+  }
+
+  async streetViewFrame(aim, offset) {
+    const url = "https://maps.googleapis.com/maps/api/streetview?size=640x480&fov=60&pitch=10&pano="
+      + encodeURIComponent(aim.pano) + "&heading=" + (aim.heading + offset) + "&key=" + encodeURIComponent(aim.key);
     const image = await new Promise((resolve, reject) => {
       const element = new Image();
       element.crossOrigin = "anonymous";
@@ -240,16 +247,33 @@ export class EvidenceViewer {
     }
   }
 
+  async streetViewFan(post, onProgress) {
+    const aim = await this.streetViewAim(post.lat, post.lng);
+    let loaded = false;
+    for (const offset of [0, -22, 22]) {
+      if (offset !== 0) onProgress?.("Checking nearby angles…");
+      let image_base64 = "";
+      try {
+        image_base64 = await this.streetViewFrame(aim, offset);
+        loaded = true;
+      } catch {
+        continue;
+      }
+      const payload = await this.postJson("/api/detect-photo", { image_base64 });
+      if (Array.isArray(payload.detections) && payload.detections.length) return payload;
+    }
+    if (!loaded) throw new Error("Street View images could not load.");
+    return { detections: [] };
+  }
+
   async runStreetViewCheck(results, post) {
     results.replaceChildren();
     const status = add(results, "p", "Analyzing Street View…", "check-status");
     const cacheKey = post.postId || post.lat + "," + post.lng;
     if (!this.streetViewCache.has(cacheKey)) {
-      this.streetViewCache.set(cacheKey, (async () => {
-        const image_base64 = await this.streetViewPhoto(post.lat, post.lng);
-        if (!image_base64) throw new Error("The Street View image could not be read.");
-        return this.postJson("/api/detect-photo", { image_base64 });
-      })());
+      this.streetViewCache.set(cacheKey, this.streetViewFan(post, (message) => {
+        status.textContent = message;
+      }));
     }
     let found = [];
     try {

@@ -54,8 +54,9 @@ export class PanoramaWalker {
         const position = data.location.latLng || this.panorama.getPosition();
         this.panorama.setPov({
           heading: position ? bearing(position, { lat, lng }) : 0,
-          pitch: 0,
+          pitch: 10,
         });
+        this.panorama.setZoom(1);
         resolve(data);
       });
     });

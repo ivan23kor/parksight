@@ -1,6 +1,6 @@
 # ParkSight: Calgary Tower pilot
 
-ParkSight maps City of Calgary curb zones and active parking signs in the four blocks between 1 Street SW, 1 Street SE, 8 Avenue, and 10 Avenue. The app shows a legend and City layers on one Google map, with a manual Street View panorama beside it. Clicking a curb or sign opens its nearby panorama and an evidence popup on the map. The popup identifies City-only records when no reviewed sign photo is linked to that curb decision or sign. Sign clicks also run a local verification analysis of the nearest Street View frame.
+ParkSight maps City of Calgary curb zones and active parking signs in the four blocks between 1 Street SW, 1 Street SE, 8 Avenue, and 10 Avenue. The app shows a legend and City layers on one Google map, with a manual Street View panorama beside it. Clicking a curb or sign opens its nearby panorama and an evidence popup on the map. The popup identifies City-only records when no reviewed sign photo is linked to that curb decision or sign. Sign clicks also run a local verification analysis sweeping nearby Street View frames.
 
 ## Run
 
